@@ -103,5 +103,48 @@ class TestApi(unittest.TestCase):
             self.assertEqual(d["totals"]["errors"], 1)
 
 
+class TestNuevasFunciones(unittest.TestCase):
+    def test_niveles_de_complejidad(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Niveles", "notes": {"title": "N", "text": MUESTRA}}).json()["id"]
+            for nivel, esperado in (("basico", 1), ("intermedio", 2), ("avanzado", 3)):
+                its = c.post("/api/session", json={"mode": "practice", "topic_ids": [tid], "n": 4, "level": nivel}).json()["items"]
+                self.assertTrue(its)
+                self.assertTrue(all(i["level"] == esperado for i in its), nivel)
+
+    def test_exportar_pdf(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "PDF", "notes": {"title": "P", "text": MUESTRA}}).json()["id"]
+            for layout in ("examen", "estudio"):
+                r = c.get(f"/api/topics/{tid}/export.pdf?layout={layout}")
+                self.assertEqual(r.status_code, 200)
+                self.assertTrue(r.content.startswith(b"%PDF"))
+
+    def test_tareas_y_pomodoros(self):
+        with TestClient(app) as c:
+            t = c.post("/api/tasks", json={"title": "Parcial", "horizon": "mes", "due_date": "2099-01-10"}).json()
+            self.assertFalse(t["done"])
+            c.post("/api/pomodoros", json={"minutes": 25, "task_id": t["id"]})
+            tareas = c.get("/api/tasks?horizon=mes").json()
+            self.assertEqual(tareas[0]["pomodoros"], 1)
+            self.assertTrue(c.patch(f"/api/tasks/{t['id']}", json={"done": True}).json()["done"])
+            self.assertEqual(c.post("/api/tasks", json={"title": "x", "due_date": "10/10/2026"}).status_code, 400)
+
+    def test_extraer_texto_de_pagina_web(self):
+        html = ("<html><head><title>Punteros - Cátedra</title></head><body><nav><p>Menú del sitio con muchos enlaces</p></nav>"
+                "<article><h1>Punteros</h1><p>" + "Un puntero almacena la dirección de memoria de otra variable. " * 4 +
+                "</p><h2>Aritmética</h2><p>" + "Sumar uno a un puntero avanza según el tamaño del tipo apuntado. " * 4 +
+                "</p></article></body></html>")
+        titulo, texto = sources.html_to_text(html)
+        self.assertEqual(titulo, "Punteros")
+        self.assertNotIn("Menú", texto)
+        secs = sources.parse_sections(texto, titulo, 20)
+        self.assertEqual([s["title"] for s in secs], ["Introducción", "Aritmética"])
+
+    def test_no_descarga_direcciones_internas(self):
+        with self.assertRaises(sources.SourceError):
+            sources._check_public_host("http://127.0.0.1:8000/")
+
+
 if __name__ == "__main__":
     unittest.main()

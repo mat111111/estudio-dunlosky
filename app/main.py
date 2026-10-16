@@ -17,7 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
@@ -121,10 +121,11 @@ def insert_items(con, topic_id: int, section_id: int, items: list[dict]) -> list
     for it in items:
         cur = con.execute(
             "INSERT INTO items(topic_id, section_id, sentence_idx, kind, prompt, answer, options, context, hint,"
-            " term_kind, origin, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            " term_kind, origin, level, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (topic_id, section_id, it.get("sentence_idx"), it["kind"], it["prompt"], it["answer"],
              json.dumps(it["options"], ensure_ascii=False) if it.get("options") else None,
-             it.get("context"), it.get("hint"), it.get("term_kind"), it.get("origin", "auto"), ts),
+             it.get("context"), it.get("hint"), it.get("term_kind"), it.get("origin", "auto"),
+             it.get("level") or generator.level_for(it), ts),
         )
         ids.append(cur.lastrowid)
     return ids
@@ -139,6 +140,7 @@ def public_item(it: dict, meta: dict) -> dict:
         "topic_title": t.get("title"), "hue": t.get("hue", 220), "section_id": it["section_id"],
         "section_title": s.get("title"), "seen": it["seen"], "last_verdict": it["last_verdict"],
         "term": it.get("_term"),
+        "level": it.get("level") or 2,
     }
 
 
@@ -199,25 +201,36 @@ async def test_ai():
 # --------------------------------------------------------------------------- #
 # Búsqueda de fuentes y creación de temas
 # --------------------------------------------------------------------------- #
+@app.get("/api/sources")
+def list_sources():
+    return [{"site": k, "name": v["name"], "about": v["about"], "lang": v["lang"],
+             "default": k in sources.DEFAULT_SEARCH} for k, v in sources.SITES.items()]
+
+
 @app.get("/api/search")
-async def search(q: str, lang: str = "es"):
+async def search(q: str, sites: str = "", lang: str | None = None):
     q = q.strip()
     if len(q) < 2:
         raise HTTPException(400, "Escribí al menos 2 letras.")
+    chosen = [x for x in sites.split(",") if x] or (
+        [sources.LANG_TO_SITE.get(lang, "wikipedia_es")] if lang else sources.DEFAULT_SEARCH)
     try:
-        res = await sources.search_wikipedia(q, lang)
-        fallback = False
-        if not res and lang == "es":
-            res = await sources.search_wikipedia(q, "en")
-            fallback = bool(res)
+        res = await sources.search_many(q, chosen)
+        # si en español no hubo nada, probamos en inglés
+        if not any(g["results"] for g in res["groups"]) and "wikipedia_en" not in chosen:
+            extra = await sources.search_many(q, ["wikipedia_en"])
+            res["groups"] += extra["groups"]
+            res["fallback_en"] = any(g["results"] for g in extra["groups"])
     except sources.SourceError as e:
         raise HTTPException(502, str(e)) from e
-    return {"results": res, "fallback_en": fallback}
+    return res
 
 
 class SourceRef(BaseModel):
-    title: str
+    title: str = ""
     lang: str = "es"
+    site: str | None = None
+    url: str | None = None
 
 
 class NotesIn(BaseModel):
@@ -235,7 +248,11 @@ async def _collect_sources(body: TopicIn) -> list[dict]:
     collected = []
     try:
         for s in body.sources[:4]:
-            collected.append(await sources.fetch_wikipedia(s.title, s.lang))
+            if s.url:
+                collected.append(await sources.fetch_url(s.url))
+            else:
+                site = s.site if s.site in sources.SITES else sources.LANG_TO_SITE.get(s.lang, "wikipedia_es")
+                collected.append(await sources.fetch_wiki(s.title, site))
         if body.notes and body.notes.text.strip():
             collected.append(sources.from_user_notes(body.notes.title or body.title or "", body.notes.text))
     except sources.SourceError as e:
@@ -425,6 +442,23 @@ class SessionIn(BaseModel):
     item_ids: list[int] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
     n: int = 12
+    level: str = "mixto"  # basico | intermedio | avanzado | mixto
+
+
+LEVEL_ORDER = {"basico": [1, 2, 3], "intermedio": [2, 1, 3], "avanzado": [3, 2, 1]}
+
+
+def _by_level(cands: list[dict], level: str, n: int) -> list[dict]:
+    """Prioriza el nivel pedido; si no alcanzan las preguntas, completa con el nivel más cercano."""
+    order = LEVEL_ORDER.get(level)
+    if not order:
+        return cands
+    out: list[dict] = []
+    for lv in order:
+        out += [c for c in cands if (c.get("level") or 2) == lv]
+        if len({(c["section_id"], c["sentence_idx"]) for c in out}) >= n:
+            break
+    return out
 
 
 def _priority(it: dict, now: str) -> tuple:
@@ -505,7 +539,7 @@ def _ensure_elaborative(con, topic_ids: list[int], need: int) -> None:
                     continue
                 new.append((sec["id"], {"kind": "why", "prompt": generator.generic_why_prompt(sents[i]),
                                         "answer": around, "context": sents[i], "sentence_idx": i,
-                                        "hint": None, "options": None, "origin": "elab"}))
+                                        "hint": None, "options": None, "origin": "elab", "level": 3}))
         random.shuffle(new)
         for sid, item in new[: max(0, need - have)]:
             insert_items(con, tid, sid, [item])
@@ -535,8 +569,10 @@ def build_session(body: SessionIn):
             if not body.section_id:
                 raise HTTPException(400, "Falta la sección")
             cands = load("SELECT * FROM items WHERE section_id=?", (body.section_id,))
+            if body.level != "avanzado":
+                cands = [c for c in cands if c["kind"] != "why"]
             cands.sort(key=lambda it: _priority(it, now))
-            picked = _pick_varied(cands, n)
+            picked = _pick_varied(_by_level(cands, body.level, n), n)
 
         elif body.mode == "review":
             cands = load(f"SELECT * FROM items WHERE topic_id IN ({ph}) AND due IS NOT NULL AND due<=? ORDER BY due",
@@ -568,7 +604,7 @@ def build_session(body: SessionIn):
 
         elif body.mode == "elaborative":
             _ensure_elaborative(con, tids, max(6, n))
-            cands = load(f"SELECT * FROM items WHERE topic_id IN ({ph}) AND kind='why'", tuple(tids))
+            cands = load(f"SELECT * FROM items WHERE topic_id IN ({ph}) AND kind IN ('why','relate')", tuple(tids))
             cands.sort(key=lambda it: _priority(it, now))
             picked = cands[:n]
 
@@ -593,7 +629,7 @@ def build_session(body: SessionIn):
                         if generator.BLANK in prompt:
                             item = {"kind": "cloze", "prompt": prompt, "answer": term, "context": sent,
                                     "sentence_idx": idx, "hint": generator._hint(term, tp.term_kind(term)),
-                                    "options": None, "origin": "mnemo"}
+                                    "options": None, "origin": "mnemo", "level": 2}
                             new_id = insert_items(con, tid, sec_id, [item])[0]
                             new_item = db.item_dict(con.execute("SELECT * FROM items WHERE id=?", (new_id,)).fetchone())
                             new_item["_term"] = term
@@ -603,10 +639,11 @@ def build_session(body: SessionIn):
         else:  # practice / interleaved
             groups = []
             for tid in tids:
-                cands = load("SELECT * FROM items WHERE topic_id=? AND kind<>'why'", (tid,))
+                sql = "SELECT * FROM items WHERE topic_id=?" + ("" if body.level == "avanzado" else " AND kind<>'why'")
+                cands = load(sql, (tid,))
                 cands.sort(key=lambda it: _priority(it, now))
                 per = n if len(tids) == 1 else max(2, -(-n // len(tids)))
-                groups.append(_pick_varied(cands, per))
+                groups.append(_pick_varied(_by_level(cands, body.level, per), per))
             picked = _interleave(groups)[:n]
             if body.mode == "interleaved":
                 intro = "Práctica intercalada: los temas se mezclan para que aprendas a distinguir cuándo aplica cada cosa."
@@ -616,7 +653,7 @@ def build_session(body: SessionIn):
     for it in items:
         if it["kind"] == "mc" and it["options"]:
             random.shuffle(it["options"])
-    return {"mode": body.mode, "intro": intro, "items": items}
+    return {"mode": body.mode, "intro": intro, "items": items, "level": body.level}
 
 
 def _definition_sentence(con, topic_id: int, term: str, kw: dict):
@@ -675,7 +712,7 @@ async def answer(body: AnswerIn):
 
     result = grader.grade(item, body.answer)
     result["by"] = "heuristica"
-    if item["kind"] in ("open", "why") and cfg.enabled and body.answer.strip():
+    if item["kind"] in ("open", "why", "relate") and cfg.enabled and body.answer.strip():
         ai_res = await ai.grade_open(cfg, item["prompt"], item["answer"], item.get("context") or "", body.answer)
         if ai_res:
             result = ai_res
@@ -705,7 +742,7 @@ async def answer(body: AnswerIn):
         "next_due": new["due"],
         "interval_days": new["interval"],
         "siblings": siblings,
-        "self_check": item["kind"] in ("open", "why"),
+        "self_check": item["kind"] in ("open", "why", "relate"),
     }
 
 
@@ -933,11 +970,179 @@ def dashboard():
             if r:
                 weak_out.append({**dict(r), "accuracy": acc, "attempts": cnt})
 
+        pomo = _pomodoro_stats(con)
+        limit_day = (today + timedelta(days=7)).isoformat()
+        urgent = [_task_out(r) for r in db.rows(con.execute(
+            "SELECT * FROM tasks WHERE done=0 AND due_date<=? ORDER BY due_date LIMIT 6", (limit_day,)))]
+
     return {
         "totals": totals, "streak": streak, "accuracy_7d": accuracy,
         "activity": [{"day": d, "count": per_day.get(d, 0), "correct": correct_day.get(d, 0)} for d in days],
         "techniques": techniques, "weak_sections": weak_out,
+        "pomodoros": pomo, "urgent_tasks": urgent,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Exportar a PDF
+# --------------------------------------------------------------------------- #
+@app.get("/api/topics/{topic_id}/export.pdf")
+def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen", max_per_section: int = 12):
+    from . import export_pdf  # importación diferida: reportlab solo se carga al exportar
+
+    layout = layout if layout in ("examen", "estudio") else "examen"
+    with db.tx() as con:
+        t = db.row(con.execute("SELECT id, title FROM topics WHERE id=?", (topic_id,)).fetchone())
+        if not t:
+            raise HTTPException(404, "Tema no encontrado")
+        srcs = db.rows(con.execute("SELECT name, title, url, license FROM sources WHERE topic_id=?", (topic_id,)))
+        secs = db.rows(con.execute("SELECT id, title FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
+        items = [db.item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE topic_id=? ORDER BY section_id, sentence_idx, id", (topic_id,))]
+    wanted = {"basico": {1}, "intermedio": {2}, "avanzado": {3}}.get(level)
+    per_section: dict[int, list[dict]] = defaultdict(list)
+    for sec in secs:
+        cands = [i for i in items if i["section_id"] == sec["id"] and (not wanted or (i.get("level") or 2) in wanted)]
+        # una pregunta por oración (para no repetir) y variando el tipo de pregunta
+        by_sent: dict = defaultdict(list)
+        for it in cands:
+            by_sent[it["sentence_idx"] if it["sentence_idx"] is not None else f"x{it['id']}"].append(it)
+        used = Counter()
+        for group in by_sent.values():
+            choice = min(group, key=lambda i: (used[i["kind"]], i["id"]))
+            used[choice["kind"]] += 1
+            per_section[sec["id"]].append(choice)
+            if len(per_section[sec["id"]]) >= max(1, min(max_per_section, 40)):
+                break
+    label = {"basico": "Nivel básico", "intermedio": "Nivel intermedio", "avanzado": "Nivel avanzado"}.get(
+        level, "Todos los niveles")
+    pdf = export_pdf.build_pdf(t, srcs, secs, per_section, layout, label)
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", tp.strip_accents(t["title"])).strip("_") or "tema"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}_preguntas.pdf"'})
+
+
+# --------------------------------------------------------------------------- #
+# Tareas (día, mes, año) y pomodoros
+# --------------------------------------------------------------------------- #
+class TaskIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    notes: str | None = None
+    horizon: str = "dia"  # dia | mes | anio
+    due_date: str  # AAAA-MM-DD
+    topic_id: int | None = None
+
+
+class TaskPatch(BaseModel):
+    title: str | None = None
+    notes: str | None = None
+    horizon: str | None = None
+    due_date: str | None = None
+    done: bool | None = None
+    topic_id: int | None = None
+
+
+def _valid_date(d: str) -> str:
+    try:
+        return datetime.strptime(d, "%Y-%m-%d").date().isoformat()
+    except ValueError as e:
+        raise HTTPException(400, "La fecha tiene que tener el formato AAAA-MM-DD.") from e
+
+
+def _task_out(r: dict) -> dict:
+    today = datetime.now(LOCAL_TZ).date()
+    due = datetime.strptime(r["due_date"], "%Y-%m-%d").date()
+    created = datetime.fromisoformat(r["created_at"]).astimezone(LOCAL_TZ).date()
+    r["days_left"] = (due - today).days
+    r["days_total"] = max(1, (due - created).days)
+    r["done"] = bool(r["done"])
+    return r
+
+
+@app.get("/api/tasks")
+def list_tasks(horizon: str | None = None):
+    with db.tx() as con:
+        sql = ("SELECT tk.*, t.title AS topic_title, t.hue AS topic_hue FROM tasks tk "
+               "LEFT JOIN topics t ON t.id = tk.topic_id")
+        args: tuple = ()
+        if horizon in ("dia", "mes", "anio"):
+            sql += " WHERE tk.horizon=?"
+            args = (horizon,)
+        rs = db.rows(con.execute(sql + " ORDER BY tk.done, tk.due_date, tk.id", args))
+    return [_task_out(r) for r in rs]
+
+
+@app.post("/api/tasks")
+def create_task(body: TaskIn):
+    if body.horizon not in ("dia", "mes", "anio"):
+        raise HTTPException(400, "Periodo inválido")
+    with db.tx() as con:
+        cur = con.execute("INSERT INTO tasks(title, notes, horizon, due_date, topic_id, created_at) VALUES(?,?,?,?,?,?)",
+                          (body.title.strip(), body.notes, body.horizon, _valid_date(body.due_date),
+                           body.topic_id, now_iso()))
+        r = db.row(con.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())
+    return _task_out(r)
+
+
+@app.patch("/api/tasks/{task_id}")
+def update_task(task_id: int, body: TaskPatch):
+    fields, args = [], []
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        if k == "due_date":
+            v = _valid_date(v)
+        if k == "horizon" and v not in ("dia", "mes", "anio"):
+            raise HTTPException(400, "Periodo inválido")
+        if k == "done":
+            fields.append("done_at=?")
+            args.append(now_iso() if v else None)
+            v = 1 if v else 0
+        fields.append(f"{k}=?")
+        args.append(v)
+    with db.tx() as con:
+        if fields:
+            con.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id=?", (*args, task_id))
+        r = db.row(con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+    if not r:
+        raise HTTPException(404, "Tarea no encontrada")
+    return _task_out(r)
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: int):
+    with db.tx() as con:
+        con.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+    return {"ok": True}
+
+
+class PomodoroIn(BaseModel):
+    minutes: float = Field(gt=0, le=180)
+    task_id: int | None = None
+
+
+def _pomodoro_stats(con) -> dict:
+    today = datetime.now(LOCAL_TZ).date().isoformat()
+    since = srs.iso(srs.now() - timedelta(days=8))
+    rs = db.rows(con.execute("SELECT minutes, created_at FROM pomodoros WHERE created_at>=?", (since,)))
+    todays = [r for r in rs if local_day(r["created_at"]) == today]
+    return {"today": len(todays), "minutes_today": round(sum(r["minutes"] for r in todays)),
+            "week": len(rs)}
+
+
+@app.post("/api/pomodoros")
+def add_pomodoro(body: PomodoroIn):
+    with db.tx() as con:
+        con.execute("INSERT INTO pomodoros(task_id, minutes, created_at) VALUES(?,?,?)",
+                    (body.task_id, body.minutes, now_iso()))
+        if body.task_id:
+            con.execute("UPDATE tasks SET pomodoros=pomodoros+1 WHERE id=?", (body.task_id,))
+        return _pomodoro_stats(con)
+
+
+@app.get("/api/pomodoros/stats")
+def pomodoro_stats():
+    with db.tx() as con:
+        return _pomodoro_stats(con)
 
 
 # --------------------------------------------------------------------------- #

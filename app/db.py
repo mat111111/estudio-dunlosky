@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS items (
     hint TEXT,
     term_kind TEXT,
     origin TEXT DEFAULT 'auto',
+    level INTEGER DEFAULT 2,
     ease REAL DEFAULT 2.5,
     interval REAL DEFAULT 0,
     reps INTEGER DEFAULT 0,
@@ -97,7 +98,43 @@ CREATE TABLE IF NOT EXISTS notes (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    notes TEXT,
+    horizon TEXT NOT NULL DEFAULT 'dia',
+    due_date TEXT NOT NULL,
+    topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+    done INTEGER DEFAULT 0,
+    done_at TEXT,
+    pomodoros INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pomodoros (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    minutes REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
+
+MIGRATIONS = [
+    # (tabla, columna, sentencia para agregarla, sentencia para completar datos existentes)
+    ("items", "level", "ALTER TABLE items ADD COLUMN level INTEGER DEFAULT 2",
+     "UPDATE items SET level = CASE kind WHEN 'tf' THEN 1 WHEN 'mc' THEN 1 WHEN 'why' THEN 3 "
+     "WHEN 'relate' THEN 3 ELSE 2 END"),
+]
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Actualiza bases de datos creadas con versiones anteriores de la app."""
+    for table, column, add_sql, fill_sql in MIGRATIONS:
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            con.execute(add_sql)
+            if fill_sql:
+                con.execute(fill_sql)
+            con.commit()
 
 
 def connect() -> sqlite3.Connection:
@@ -107,6 +144,7 @@ def connect() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     if path not in _initialized:  # crea las tablas la primera vez que se usa el archivo
         con.executescript(SCHEMA)
+        _migrate(con)
         _initialized.add(path)
     con.execute("PRAGMA foreign_keys=ON")
     return con

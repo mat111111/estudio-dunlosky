@@ -126,6 +126,24 @@ class Distractors:
         return out
 
 
+def _relate_pair(sentence: str, strong: list[str], used: set) -> tuple[str, str] | None:
+    """Dos conceptos de la oración que no formen una sola expresión (p. ej. «ciclo de Calvin»)."""
+    low = sentence.lower()
+    for i, a in enumerate(strong):
+        for b in strong[i + 1:]:
+            if frozenset((tp.normalize(a), tp.normalize(b))) in used:
+                continue
+            pa, pb = low.find(a.lower()), low.find(b.lower())
+            if pa < 0 or pb < 0:
+                continue
+            first, second = (a, b) if pa < pb else (b, a)
+            gap = low[min(pa, pb) + len(first): max(pa, pb)]
+            if len(gap.split()) <= 2:  # demasiado juntas: es una misma expresión
+                continue
+            return a, b
+    return None
+
+
 def _eligible(sentence: str) -> bool:
     wc = tp.word_count(sentence)
     if wc < 6 or wc > 50:
@@ -146,6 +164,7 @@ def generate_for_section(section_text: str, keywords: dict[str, dict], title: st
     sentences = [x for _, x in tp.section_sentences(section_text)]
     dis = Distractors(keywords, rng)
     items: list[dict] = []
+    used_pairs: set = set()
 
     for idx, s in enumerate(sentences):
         if not _eligible(s):
@@ -195,6 +214,19 @@ def generate_for_section(section_text: str, keywords: dict[str, dict], title: st
         if not terms:
             continue
         weight_cut = 0.9 if context_ok else 1.4
+
+        # --- relación entre conceptos (nivel avanzado) ------------------------
+        strong = [t for t, i in terms if i["weight"] >= 1.2 and i["kind"] != "year"
+                  and not (i["kind"] == "concept" and tp.VERBISH.search(tp.normalize(t)))]
+        pair = _relate_pair(s, strong, used_pairs) if context_ok and tp.word_count(s) >= 10 else None
+        if pair and rng.random() < 0.5:
+            a, b = pair
+            used_pairs.add(frozenset((tp.normalize(a), tp.normalize(b))))
+            items.append({
+                "kind": "relate", "prompt": f"Según el texto, ¿qué relación hay entre «{a}» y «{b}»?",
+                "answer": s, "context": s, "sentence_idx": idx, "hint": None, "options": None,
+            })
+
         terms = [ti for ti in terms if ti[1]["weight"] >= weight_cut][:2]
 
         for n, (term, info) in enumerate(terms):
@@ -236,10 +268,13 @@ def generate_for_section(section_text: str, keywords: dict[str, dict], title: st
                             "hint": None,
                         })
 
-    # limitar manteniendo variedad: priorizamos open/why y repartimos el resto
+    for it in items:
+        it.setdefault("level", level_for(it))
+
+    # limitar manteniendo variedad: priorizamos las de desarrollo y repartimos el resto
     if len(items) > max_items:
-        special = [i for i in items if i["kind"] in ("open", "why")]
-        rest = [i for i in items if i["kind"] not in ("open", "why")]
+        special = [i for i in items if i["kind"] in ("open", "why", "relate")]
+        rest = [i for i in items if i["kind"] not in ("open", "why", "relate")]
         step = len(rest) / max(max_items - len(special), 1)
         picked = [rest[int(j * step)] for j in range(max(max_items - len(special), 0)) if int(j * step) < len(rest)]
         items = sorted(special + picked, key=lambda i: i["sentence_idx"])
@@ -262,6 +297,24 @@ def generate_topic_items(sections: list[dict], title: str, seed: int) -> tuple[d
         cap = max(8, min(36, budget // max(len(sections), 1)))
         per_section.append(generate_for_section(s["text"], keywords, title, rng, cap))
     return keywords, per_section
+
+
+LEVELS = {1: "Básico", 2: "Intermedio", 3: "Avanzado"}
+
+
+def level_for(item: dict) -> int:
+    """Nivel de complejidad de una pregunta.
+
+    1 Básico: reconocer (verdadero/falso, opción múltiple).
+    2 Intermedio: recordar sin opciones (completar, definir).
+    3 Avanzado: explicar causas y relacionar conceptos.
+    """
+    kind = item.get("kind")
+    if kind in ("tf", "mc"):
+        return 1
+    if kind in ("why", "relate"):
+        return 3
+    return 2
 
 
 def generic_why_prompt(sentence: str) -> str:

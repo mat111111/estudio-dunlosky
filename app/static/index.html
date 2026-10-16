@@ -26,6 +26,8 @@
         <a href="#/nuevo" data-nav="nuevo"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><span>Nuevo tema</span></a>
         <a href="#/practicar?mode=review" data-nav="repaso"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>Repaso de hoy</span><b class="pill" id="nav-due" hidden></b></a>
         <a href="#/practicar?mode=errors" data-nav="errores"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 19 5M5 5l14 14"/></svg><span>Mis errores</span><b class="pill red" id="nav-err" hidden></b></a>
+        <a href="#/pomodoro" data-nav="pomodoro"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5M12 3v2.5"/></svg><span>Pomodoro</span><b class="pill clock" id="nav-pomo" hidden></b></a>
+        <a href="#/tareas" data-nav="tareas"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 2.5 2.5L16 9"/></svg><span>Tareas</span></a>
         <a href="#/intercalada" data-nav="intercalada"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7l6 10h3M4 17h7l6-10h3"/></svg><span>Intercalar temas</span></a>
         <a href="#/guia" data-nav="guia"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"/><path d="M9 12h6M9 16h6"/></svg><span>Guía de técnicas</span></a>
         <a href="#/ajustes" data-nav="ajustes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span>Ajustes</span></a>
@@ -38,6 +40,9 @@
     <main id="main" tabindex="-1"></main>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <dialog id="pomo-dialog" aria-label="Pomodoro terminado"></dialog>
+  <script src="/static/pomodoro.js"></script>
+  <script src="/static/tasks.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

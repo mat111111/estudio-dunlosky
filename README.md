@@ -2,7 +2,7 @@
 
 Aplicación de estudio que funciona en tu navegador y se levanta con Docker. Escribís cualquier tema, la app busca la información en Wikipedia (o usa tus apuntes), genera preguntas a partir del texto, corrige tus respuestas comparándolas con la fuente y te hace practicar justo las partes en las que te equivocaste.
 
-Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron.
+Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas y **exportación a PDF**.
 
 ---
 
@@ -46,6 +46,37 @@ Atajos de teclado en la práctica: `1`–`4` eligen una opción, `Enter` pasa a 
 
 ---
 
+## Herramientas de organización
+
+### Pomodoro
+- Duración configurable de concentración, descanso corto y descanso largo, y cada cuántos pomodoros toca el largo.
+- **Sonidos**: alarma a elegir (campana, marimba, digital, cuenco tibetano, gong) y sonido de fondo opcional mientras te concentrás (lluvia suave, ruido rosa, ruido blanco, tic-tac), con volumen independiente. Todos se generan en el navegador, sin archivos externos.
+- Al terminar cada pomodoro: **“¡Seguí así, lo estás logrando!”** y una frase de Albert Einstein. Solo se usan frases con origen documentado (entrevistas, cartas o libros, que se indican), porque circulan muchas atribuidas a él que nunca dijo.
+- El temporizador sigue corriendo mientras usás el resto de la app (se ve en el menú) y podés asociarlo a una tarea.
+- Opcional: notificación del sistema si estás en otra pestaña.
+
+### Tareas (día, mes, año)
+- Cada tarea tiene un periodo (Día, Mes o Año) y el **tiempo disponible** (en días, semanas o meses, o directamente una fecha límite).
+- Con 7 días o más se ve en verde. **Con menos de una semana el color pasa de amarillo (6 días) a rojo (vence hoy)**; si se vence queda en rojo intenso. Las urgentes aparecen también en el inicio.
+- Muestra una barra con el tiempo transcurrido y cuántos pomodoros le dedicaste.
+
+### Nivel de complejidad de las preguntas
+| Nivel | Qué pide |
+|---|---|
+| Básico | Reconocer: verdadero o falso y opción múltiple. |
+| Intermedio | Recordar sin opciones: completar y definir. |
+| Avanzado | Explicar causas (“¿por qué?”) y relacionar dos conceptos del texto, sin pistas. |
+| Mixto | Todo combinado. |
+
+Se elige en la página de cada tema y en la práctica intercalada; la app lo recuerda. Si no hay suficientes preguntas del nivel pedido, completa con el más cercano.
+
+### Exportar a PDF
+Desde cada tema, **Exportar PDF** genera un cuestionario con preguntas y respuestas, filtrado por nivel:
+- **Examen**: preguntas con espacio para responder y la clave de respuestas al final (para practicar en papel).
+- **Guía de estudio**: cada pregunta con su respuesta y la oración de la fuente que la respalda.
+
+---
+
 ## Las 10 técnicas y qué hace la app con cada una
 
 | Utilidad (Dunlosky, 2013) | Técnica | En la app |
@@ -67,7 +98,12 @@ Referencia: Dunlosky, J., Rawson, K. A., Marsh, E. J., Nathan, M. J. y Willingha
 
 ## De dónde sale la información y cómo se comprueba
 
-- **Fuente**: la API oficial de Wikipedia (MediaWiki). Se guarda el número de **revisión exacta** del artículo, así cada corrección se hace contra ese texto aunque el artículo cambie después. Se descartan secciones como Referencias, Enlaces externos o Véase también.
+- **Fuentes integradas** (se buscan todas a la vez, con su API oficial y licencia libre):
+  - **Wikipedia** en español e inglés, y **Simple English Wikipedia** (explicaciones más sencillas);
+  - **Wikilibros** y **Wikibooks**: libros de texto y manuales escritos de forma colaborativa;
+  - **Wikiversidad**: cursos y material didáctico.
+- **Cualquier página web** por su dirección: documentación, artículos, apuntes publicados. La app sugiere sitios recomendados (MDN, documentación de Python, cppreference, SciELO, Educ.ar, OpenStax). Las páginas que piden iniciar sesión o se arman con JavaScript no se pueden importar; en ese caso, copiá el texto y pegalo como apuntes.
+- En los wikis se guarda la **revisión exacta** del artículo, así cada corrección se hace contra ese texto aunque cambie después. Se descartan secciones como Referencias, Enlaces externos o Véase también.
 - **Cada pregunta está anclada a una oración** del texto descargado. Al corregir se muestra esa oración como evidencia.
 - **Corrección**:
   - opción múltiple y verdadero/falso: exacta;
@@ -114,14 +150,16 @@ Si el 8000 está ocupado, copiá `.env.example` como `.env` y cambiá `PUERTO=80
 estudio-dunlosky/
 ├── app/
 │   ├── main.py        API (FastAPI): temas, sesiones, corrección, técnicas, panel
-│   ├── sources.py     Wikipedia (búsqueda y descarga) y apuntes propios
+│   ├── sources.py     Wikis (búsqueda y descarga), páginas web por URL y apuntes propios
+│   ├── export_pdf.py  Cuestionarios en PDF
 │   ├── textproc.py    Oraciones, normalización, palabras y oraciones clave
 │   ├── generator.py   Generación de preguntas ancladas a la fuente
 │   ├── grader.py      Corrección de respuestas, resúmenes, subrayados y explicaciones
 │   ├── srs.py         Repetición espaciada (SM-2)
 │   ├── ai.py          Modo IA opcional (con verificación de citas)
 │   ├── db.py          Esquema y acceso a SQLite
-│   └── static/        Interfaz: index.html, styles.css, app.js (sin frameworks)
+│   └── static/        Interfaz sin frameworks: index.html, styles.css, app.js,
+│                      pomodoro.js (temporizador y sonidos) y tasks.js (tareas)
 ├── tests/             Pruebas automáticas (no necesitan internet)
 ├── Dockerfile
 ├── docker-compose.yml

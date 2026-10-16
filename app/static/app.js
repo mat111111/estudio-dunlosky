@@ -55,7 +55,34 @@ function highlightIn(text, term) {
 }
 function setTitle(t) { document.title = t ? `${t} | Estudio Dunlosky` : "Estudio Dunlosky"; }
 
-const KIND = { mc: "Opción múltiple", cloze: "Completar", tf: "Verdadero o falso", open: "Respuesta abierta", why: "¿Por qué?" };
+const KIND = { mc: "Opción múltiple", cloze: "Completar", tf: "Verdadero o falso", open: "Respuesta abierta", why: "¿Por qué?", relate: "Relacionar conceptos" };
+
+// Nivel de complejidad de las preguntas (se recuerda en este navegador)
+const LEVELS = {
+  basico: { label: "Básico", help: "Reconocer: verdadero o falso y opción múltiple." },
+  intermedio: { label: "Intermedio", help: "Recordar sin opciones: completar y definir." },
+  avanzado: { label: "Avanzado", help: "Explicar causas y relacionar conceptos, sin pistas." },
+  mixto: { label: "Mixto", help: "Todos los niveles combinados." },
+};
+const LEVEL_NUM = { 1: "Básico", 2: "Intermedio", 3: "Avanzado" };
+function getLevel() { try { return localStorage.getItem("nivel") || "mixto"; } catch (e) { return "mixto"; } }
+function setLevel(v) { try { localStorage.setItem("nivel", v); } catch (e) { /* sin almacenamiento */ } }
+function levelPicker() {
+  const cur = getLevel();
+  return `<div class="level-pick">
+    <span class="small muted">Nivel de las preguntas</span>
+    <div class="seg" role="group" aria-label="Nivel de complejidad">${Object.entries(LEVELS).map(([k, v]) =>
+      `<button type="button" data-level="${k}" aria-pressed="${k === cur}" title="${esc(v.help)}">${v.label}</button>`).join("")}</div>
+    <span class="small muted level-help">${esc(LEVELS[cur].help)}</span>
+  </div>`;
+}
+function bindLevelPicker(root = document) {
+  $$("[data-level]", root).forEach(b => b.addEventListener("click", () => {
+    setLevel(b.dataset.level);
+    $$("[data-level]", root).forEach(x => x.setAttribute("aria-pressed", x.dataset.level === b.dataset.level));
+    $$(".level-help", root).forEach(h => (h.textContent = LEVELS[b.dataset.level].help));
+  }));
+}
 
 const TECH = [
   { key: "practica", util: "alta", name: "Autoevaluación", en: "Practice testing",
@@ -118,6 +145,8 @@ const routes = [
   [/^\/practicar$/, viewSession, null],
   [/^\/intercalada$/, viewInterleave, "intercalada"],
   [/^\/guia$/, viewGuide, "guia"],
+  [/^\/pomodoro$/, viewPomodoro, "pomodoro"],
+  [/^\/tareas$/, viewTasks, "tareas"],
   [/^\/ajustes$/, viewSettings, "ajustes"],
 ];
 function parseHash() {
@@ -240,8 +269,13 @@ async function viewHome() {
         <div class="stat"><b>${d.streak}</b><span>${d.streak === 1 ? "día seguido" : "días seguidos"}</span></div>
         <div class="stat"><b>${pct(d.accuracy_7d)}</b><span>aciertos en 7 días</span></div>
         <div class="stat"><b>${t.mastered}<small class="muted" style="font-size:16px"> / ${t.items}</small></b><span>preguntas dominadas</span></div>
-        <div class="stat"><b>${t.topics}</b><span>${t.topics === 1 ? "tema" : "temas"}</span></div>
+        <div class="stat"><b>${d.pomodoros.today}</b><span>${d.pomodoros.today === 1 ? "pomodoro hoy" : "pomodoros hoy"}</span></div>
       </div>
+      ${d.urgent_tasks.length ? `
+        <div class="panel" style="margin-top:16px">
+          <div class="row"><h3>Tareas que vencen esta semana</h3><span class="spacer"></span><a class="btn ghost" href="#/tareas">Ver todas</a></div>
+          <ul class="list tasks compact" style="margin-top:10px">${d.urgent_tasks.map(x => taskRow(x, true)).join("")}</ul>
+        </div>` : ""}
 
       <div class="grid-2" style="margin-top:16px">
         <div class="panel">
@@ -294,40 +328,63 @@ function topicCard(tp) {
 // ------------------------------------------------------------------------- //
 // Nuevo tema
 // ------------------------------------------------------------------------- //
+// Sitios recomendados para importar por URL (se abren en otra pestaña para buscar ahí)
+const RECOMMENDED_SITES = [
+  { name: "MDN Web Docs", url: "https://developer.mozilla.org/es/", about: "Programación web: HTML, CSS y JavaScript, en español." },
+  { name: "Documentación de Python", url: "https://docs.python.org/es/3/", about: "Tutorial y referencia oficial de Python, en español." },
+  { name: "cppreference", url: "https://es.cppreference.com/", about: "Referencia de C y C++ (parte en español, completa en inglés)." },
+  { name: "SciELO", url: "https://scielo.org/es/", about: "Artículos académicos revisados de revistas de Iberoamérica." },
+  { name: "Educ.ar", url: "https://www.educ.ar/", about: "Recursos educativos del Ministerio de Educación de Argentina." },
+  { name: "OpenStax", url: "https://openstax.org/subjects", about: "Libros universitarios abiertos (en inglés)." },
+];
+
 async function viewNew(params) {
   setTitle("Nuevo tema");
   const addTo = params.get("agregar");
-  let lang = "es";
-  const selected = new Map();
-  const tab = params.get("tab") === "notas" ? "notas" : "web";
+  const selected = new Map();  // clave → {site,title,url,label,source}
+  const tab = ["notas", "web"].includes(params.get("tab")) ? params.get("tab") : "buscar";
+  let sites = [];
+  try { sites = await api("/api/sources"); } catch (e) { /* lista por defecto */ }
+  const active = new Set(sites.filter(s => s.default).map(s => s.site));
+
   main.innerHTML = `
     <div class="page narrow">
       <div class="page-head">
         <h1>${addTo ? "Agregar otra fuente" : "Nuevo tema"}</h1>
-        <p class="lead">${addTo ? "Sumá otro artículo o tus apuntes al mismo tema: las preguntas se van a mezclar." : "Buscá en Wikipedia, una fuente abierta, revisada y con historial de cambios. Podés combinar hasta cuatro artículos."}</p>
+        <p class="lead">${addTo ? "Sumá otro artículo, una página web o tus apuntes al mismo tema: las preguntas se van a mezclar."
+          : "Buscá en enciclopedias y libros de texto abiertos, importá una página de estudio o pegá tus apuntes. Podés combinar hasta cuatro fuentes."}</p>
       </div>
       <div class="tabs" role="tablist">
-        <button role="tab" data-tab="web" aria-selected="${tab === "web"}">Buscar en Wikipedia</button>
+        <button role="tab" data-tab="buscar" aria-selected="${tab === "buscar"}">Buscar en fuentes</button>
+        <button role="tab" data-tab="web" aria-selected="${tab === "web"}">Desde una página web</button>
         <button role="tab" data-tab="notas" aria-selected="${tab === "notas"}">Pegar mis apuntes</button>
       </div>
-      <section id="tab-web" ${tab === "web" ? "" : "hidden"}>
+
+      <section id="tab-buscar" ${tab === "buscar" ? "" : "hidden"}>
         <form class="search-bar" id="search">
           <input class="input" name="q" placeholder="Escribí el tema que querés estudiar" aria-label="Tema" required minlength="2" value="${esc(params.get("q") || "")}">
           <button class="btn primary big">Buscar</button>
         </form>
-        <div class="row" style="margin-top:12px">
-          <span class="small muted">Idioma de la fuente</span>
-          <div class="seg" role="group" aria-label="Idioma">
-            <button type="button" data-lang="es" aria-pressed="true">Español</button>
-            <button type="button" data-lang="en" aria-pressed="false">English</button>
-          </div>
+        <div class="src-chips" role="group" aria-label="Dónde buscar">
+          <span class="small muted">Buscar en:</span>
+          ${sites.map(s => `<label class="src-chip" title="${esc(s.about)}"><input type="checkbox" value="${s.site}" ${active.has(s.site) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}
         </div>
-        <div id="results" class="stack" style="--gap:10px;margin-top:22px"></div>
-        <div id="create-bar" class="panel" style="margin-top:18px" hidden>
-          ${addTo ? "" : `<label class="field"><span>Nombre del tema</span><input class="input" id="topic-title"></label>`}
-          <div class="actions"><button class="btn primary big" id="create"></button><span class="small muted" id="create-msg"></span></div>
-        </div>
+        <div id="results" class="stack" style="--gap:22px;margin-top:22px"></div>
       </section>
+
+      <section id="tab-web" ${tab === "web" ? "" : "hidden"}>
+        <form class="search-bar" id="url-form">
+          <input class="input" name="url" type="url" required placeholder="https://… (pegá el enlace de la página)" aria-label="Dirección de la página">
+          <button class="btn primary big">Agregar</button>
+        </form>
+        <p class="small muted" style="margin-top:10px">Funciona con páginas de texto: documentación, artículos, apuntes de cátedra publicados. Si una página no se puede importar (porque pide iniciar sesión o se arma con JavaScript), copiá el texto y usá «Pegar mis apuntes».</p>
+        <h2 class="section-title">Sitios recomendados para estudiar</h2>
+        <ul class="list">${RECOMMENDED_SITES.map(r => `
+          <li><div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.about)}</div></div>
+          <a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">Abrir sitio</a></li>`).join("")}</ul>
+        <p class="small muted" style="margin-top:10px">Buscá ahí la página que necesitás, copiá su dirección y pegala arriba.</p>
+      </section>
+
       <section id="tab-notas" ${tab === "notas" ? "" : "hidden"}>
         <form id="notes-form" class="stack">
           ${addTo ? "" : `<label class="field"><span>Nombre del tema</span><input class="input" name="title" required placeholder="Por ejemplo: Unidad 3, procesos e hilos"></label>`}
@@ -338,58 +395,84 @@ async function viewNew(params) {
           <div class="actions"><button class="btn primary big">${addTo ? "Agregar apuntes" : "Crear tema"}</button><span class="small muted" id="notes-msg"></span></div>
         </form>
       </section>
+
+      <div id="create-bar" class="panel" style="margin-top:22px" hidden>
+        <h3>Fuentes elegidas</h3>
+        <ul class="chosen" id="chosen"></ul>
+        ${addTo ? "" : `<label class="field" style="margin-top:12px"><span>Nombre del tema</span><input class="input" id="topic-title" placeholder="Si lo dejás vacío, se usa el título de la primera fuente"></label>`}
+        <div class="actions"><button class="btn primary big" id="create"></button><span class="small muted" id="create-msg"></span></div>
+      </div>
     </div>`;
 
   $$("[data-tab]").forEach(b => b.addEventListener("click", () => {
     $$("[data-tab]").forEach(x => x.setAttribute("aria-selected", x === b));
-    $("#tab-web").hidden = b.dataset.tab !== "web";
-    $("#tab-notas").hidden = b.dataset.tab !== "notas";
+    ["buscar", "web", "notas"].forEach(k => ($(`#tab-${k}`).hidden = b.dataset.tab !== k));
+    $("#create-bar").hidden = b.dataset.tab === "notas" || selected.size === 0;
   }));
-  $$("[data-lang]").forEach(b => b.addEventListener("click", () => {
-    lang = b.dataset.lang;
-    $$("[data-lang]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  $$(".src-chip input").forEach(cb => cb.addEventListener("change", () => {
+    cb.checked ? active.add(cb.value) : active.delete(cb.value);
     if ($("#search [name=q]").value.trim().length > 1) doSearch();
   }));
+
+  const ti = $("#topic-title");
+  if (ti) ti.addEventListener("input", () => (ti.dataset.touched = "1"));
 
   function updateBar() {
     const bar = $("#create-bar");
     bar.hidden = selected.size === 0;
+    $("#chosen").innerHTML = [...selected.entries()].map(([k, s]) =>
+      `<li><span class="chip">${esc(s.source)}</span> ${esc(s.label)} <button class="btn ghost small" data-rm="${esc(k)}" aria-label="Quitar">Quitar</button></li>`).join("");
+    $$("[data-rm]").forEach(b => b.addEventListener("click", () => {
+      selected.delete(b.dataset.rm);
+      $$(`.result-item input[data-key="${CSS.escape(b.dataset.rm)}"]`).forEach(cb => { cb.checked = false; cb.closest(".result-item").classList.remove("sel"); });
+      updateBar();
+    }));
     const first = [...selected.values()][0];
-    const titleInput = $("#topic-title");
-    if (titleInput && first && !titleInput.dataset.touched) titleInput.value = first.title;
-    $("#create").textContent = addTo
-      ? `Agregar ${plural(selected.size, "fuente", "fuentes")}`
-      : `Crear tema con ${plural(selected.size, "fuente", "fuentes")}`;
+    if (ti && first && !ti.dataset.touched) ti.value = first.url ? "" : first.label;
+    $("#create").textContent = addTo ? `Agregar ${plural(selected.size, "fuente", "fuentes")}` : `Crear tema con ${plural(selected.size, "fuente", "fuentes")}`;
   }
-  const ti = $("#topic-title");
-  if (ti) ti.addEventListener("input", () => (ti.dataset.touched = "1"));
+  function select(key, entry, on) {
+    if (on) {
+      if (selected.size >= 4 && !selected.has(key)) { toast("Podés combinar hasta 4 fuentes por tema."); return false; }
+      selected.set(key, entry);
+    } else selected.delete(key);
+    updateBar();
+    return true;
+  }
 
   async function doSearch() {
     const q = $("#search [name=q]").value.trim();
     const box = $("#results");
+    if (!active.size) { box.innerHTML = `<p class="muted">Elegí al menos una fuente donde buscar.</p>`; return; }
     box.innerHTML = `<p class="muted"><span class="loader"></span> Buscando “${esc(q)}”…</p>`;
     try {
-      const res = await api(`/api/search?q=${encodeURIComponent(q)}&lang=${lang}`);
-      if (!res.results.length) {
-        box.innerHTML = `<div class="empty"><h3>Sin resultados</h3><p class="muted">Probá con otras palabras, con el nombre más general del tema o cambiá el idioma.</p></div>`;
+      const res = await api(`/api/search?q=${encodeURIComponent(q)}&sites=${[...active].join(",")}`);
+      const groups = res.groups.filter(g => g.results.length);
+      if (!groups.length) {
+        box.innerHTML = `<div class="empty"><h3>Sin resultados</h3><p class="muted">Probá con otras palabras, con el nombre más general del tema o sumá más fuentes.</p></div>`;
         return;
       }
-      box.innerHTML = (res.fallback_en ? `<p class="callout small">No hubo resultados en español; estos artículos están en inglés.</p>` : "") +
-        res.results.map((r, i) => `
-          <label class="result-item ${selected.has(r.lang + r.title) ? "sel" : ""}">
-            <input type="checkbox" data-i="${i}" ${selected.has(r.lang + r.title) ? "checked" : ""}>
-            <div><h3>${esc(r.title)}</h3><p>${esc(r.snippet)}…</p>
-            <p class="small muted">${r.words.toLocaleString("es-AR")} palabras, Wikipedia (${r.lang}) · <a href="${esc(r.url)}" target="_blank" rel="noopener">ver artículo</a></p></div>
-          </label>`).join("");
+      const all = [];
+      box.innerHTML = (res.fallback_en ? `<p class="callout small">No hubo resultados en español; se muestran artículos en inglés.</p>` : "") +
+        groups.map(g => `
+          <div class="src-group">
+            <div class="row" style="margin-bottom:8px"><h3>${esc(g.name)}</h3><span class="small muted">${esc(g.about)}</span></div>
+            <div class="stack" style="--gap:8px">${g.results.map(r => {
+              const i = all.push(r) - 1;
+              const key = `${r.site}|${r.title}`;
+              return `<label class="result-item ${selected.has(key) ? "sel" : ""}">
+                <input type="checkbox" data-i="${i}" data-key="${esc(key)}" ${selected.has(key) ? "checked" : ""}>
+                <div><h3>${esc(r.title)}</h3><p>${esc(r.snippet)}…</p>
+                <p class="small muted">${r.words.toLocaleString("es-AR")} palabras, <a href="${esc(r.url)}" target="_blank" rel="noopener">ver página</a></p></div>
+              </label>`;
+            }).join("")}</div>
+          </div>`).join("") +
+        res.errors.map(e => `<p class="small muted">No se pudo consultar ${esc(e.name)}.</p>`).join("");
       $$("#results input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
-        const r = res.results[+cb.dataset.i];
-        const k = r.lang + r.title;
-        if (cb.checked) {
-          if (selected.size >= 4) { cb.checked = false; toast("Podés combinar hasta 4 artículos por tema."); return; }
-          selected.set(k, r);
-        } else selected.delete(k);
+        const r = all[+cb.dataset.i];
+        const ok = select(cb.dataset.key, { site: r.site, title: r.title, label: r.title, source: r.source_name }, cb.checked);
+        if (!ok) cb.checked = false;
         cb.closest(".result-item").classList.toggle("sel", cb.checked);
-        updateBar();
       }));
     } catch (e) {
       box.innerHTML = `<div class="empty"><h3>No se pudo buscar</h3><p class="muted">${esc(e.message)}</p></div>`;
@@ -398,9 +481,20 @@ async function viewNew(params) {
   $("#search").addEventListener("submit", e => { e.preventDefault(); doSearch(); });
   if (params.get("q")) doSearch();
 
+  $("#url-form").addEventListener("submit", e => {
+    e.preventDefault();
+    const url = e.target.url.value.trim();
+    let host = url;
+    try { host = new URL(url).hostname.replace(/^www\./, ""); } catch (err) { /* se valida en el servidor */ }
+    if (select(`url|${url}`, { url, label: url, source: host }, true)) {
+      e.target.reset();
+      toast("Página agregada a las fuentes");
+    }
+  });
+
   async function create(payload, msgEl, btn) {
     btn.disabled = true;
-    msgEl.innerHTML = `<span class="loader"></span> Descargando la fuente y generando preguntas…`;
+    msgEl.innerHTML = `<span class="loader"></span> Descargando las fuentes y generando preguntas…`;
     try {
       const res = addTo
         ? await api(`/api/topics/${addTo}/sources`, { method: "POST", body: payload })
@@ -415,8 +509,8 @@ async function viewNew(params) {
   }
   $("#create").addEventListener("click", e => {
     const title = $("#topic-title")?.value.trim();
-    create({ title: title || null, sources: [...selected.values()].map(r => ({ title: r.title, lang: r.lang })) },
-      $("#create-msg"), e.currentTarget);
+    const srcs = [...selected.values()].map(s => (s.url ? { url: s.url } : { site: s.site, title: s.title }));
+    create({ title: title || null, sources: srcs }, $("#create-msg"), e.currentTarget);
   });
   $("#notes-form").addEventListener("submit", e => {
     e.preventDefault();
@@ -452,6 +546,22 @@ async function viewTopic(id, params) {
           <button class="btn primary big" id="go-practice">Practicar ahora</button>
           ${s.due ? `<button class="btn big" id="go-review">Repasar lo de hoy (${s.due})</button>` : ""}
           ${s.errors ? `<button class="btn big" id="go-errors">Practicar errores (${s.errors})</button>` : ""}
+          <button class="btn ghost big" id="go-export" aria-expanded="false">Exportar PDF</button>
+        </div>
+        ${levelPicker()}
+        <div class="panel export-panel" id="export-panel" hidden>
+          <h3>Exportar preguntas y respuestas</h3>
+          <div class="row" style="margin-top:12px;align-items:flex-end">
+            <label class="field"><span>Nivel</span><select class="input" id="ex-level">
+              ${Object.entries(LEVELS).map(([k, v]) => `<option value="${k}" ${k === getLevel() ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
+            <label class="field"><span>Formato</span><select class="input" id="ex-layout">
+              <option value="examen">Examen: respuestas al final</option>
+              <option value="estudio">Guía de estudio: respuesta debajo de cada pregunta</option></select></label>
+            <label class="field"><span>Preguntas por sección</span><select class="input" id="ex-max">
+              ${[5, 8, 12, 20, 40].map(n => `<option ${n === 12 ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+            <a class="btn primary" id="ex-go" download>Descargar PDF</a>
+          </div>
+          <p class="small muted" style="margin-top:10px">El formato examen sirve para practicar en papel: respondé sin mirar y corregí con la clave del final.</p>
         </div>
       </div>
       <div class="tabs" role="tablist">
@@ -460,6 +570,15 @@ async function viewTopic(id, params) {
       </div>
       <div id="tab-body"></div>
     </div>`;
+  bindLevelPicker();
+  const exUrl = () => `/api/topics/${t.id}/export.pdf?level=${$("#ex-level").value}&layout=${$("#ex-layout").value}&max_per_section=${$("#ex-max").value}`;
+  $("#go-export").addEventListener("click", e => {
+    const p = $("#export-panel");
+    p.hidden = !p.hidden;
+    e.currentTarget.setAttribute("aria-expanded", String(!p.hidden));
+    $("#ex-go").href = exUrl();
+  });
+  ["#ex-level", "#ex-layout", "#ex-max"].forEach(sel => $(sel).addEventListener("change", () => ($("#ex-go").href = exUrl())));
   $("#go-practice").addEventListener("click", () => startSession({ mode: "practice", topic_ids: [t.id], n: 12, tech: "practica", back: `#/tema/${t.id}` }));
   $("#go-review")?.addEventListener("click", () => startSession({ mode: "review", topic_ids: [t.id], n: 30, tech: "distribuida", back: `#/tema/${t.id}` }));
   $("#go-errors")?.addEventListener("click", () => startSession({ mode: "errors", topic_ids: [t.id], n: 12, tech: "errores", back: `#/tema/${t.id}` }));
@@ -544,7 +663,8 @@ async function viewSession(params) {
   pendingSession = null;
   const back = opts.back || "#/";
   const body = { mode: opts.mode, topic_ids: opts.topic_ids || [], section_id: opts.section_id || null,
-    item_ids: opts.item_ids || [], terms: opts.terms || [], n: opts.n || 12 };
+    item_ids: opts.item_ids || [], terms: opts.terms || [], n: opts.n || 12,
+    level: opts.level || (["practice", "section", "interleaved"].includes(opts.mode) ? getLevel() : "mixto") };
   const data = await api("/api/session", { method: "POST", body });
   const titles = { practice: "Autoevaluación", review: "Repaso de hoy", errors: "Práctica de errores", interleaved: "Práctica intercalada",
     elaborative: "Interrogación elaborativa", section: "Práctica de la sección", items: opts.title || "Práctica", terms: "Práctica de términos" };
@@ -607,10 +727,11 @@ async function viewSession(params) {
           ${it.section_title ? `<span>${esc(it.section_title)}</span>` : ""}
           <span class="spacer"></span>
           <span class="kind">${isRetry ? "Segundo intento" : KIND[it.kind]}</span>
+          <span class="lvl lvl-${it.level}">${LEVEL_NUM[it.level] || ""}</span>
         </div>
         <div class="q-text">${prompt}</div>
         ${input}
-        <div id="hint-slot">${it.hint || custom ? `<button class="btn ghost small" id="hint-btn" style="margin-top:10px">Ver pista</button>` : ""}</div>
+        <div id="hint-slot">${(it.hint && data.level !== "avanzado") || custom ? `<button class="btn ghost small" id="hint-btn" style="margin-top:10px">Ver pista</button>` : ""}</div>
       </article>
       <div id="fb"></div>`);
 
@@ -676,7 +797,7 @@ async function viewSession(params) {
         <p class="fb-text">${esc(res.feedback)}</p>
         ${showAnswer ? `<div class="correction">
           ${!choice && answer.trim() && v !== "correct" ? `<div class="yours">Tu respuesta: <s>${esc(answer)}</s></div>` : ""}
-          ${!choice ? `<div><span class="small muted">${it.kind === "open" || it.kind === "why" ? "Lo que dice la fuente:" : "Respuesta:"}</span><br><span class="pen">${esc(res.correct_answer)}</span></div>` : ""}
+          ${!choice ? `<div><span class="small muted">${["open", "why", "relate"].includes(it.kind) ? "Lo que dice la fuente:" : "Respuesta:"}</span><br><span class="pen">${esc(res.correct_answer)}</span></div>` : ""}
         </div>` : ""}
         ${res.matched?.length || res.missing?.length ? `<div class="chips">${(res.matched || []).map(m => `<span class="chip ok">${esc(m)}</span>`).join("")}${(res.missing || []).map(m => `<span class="chip no">Faltó: ${esc(m)}</span>`).join("")}</div>` : ""}
         ${res.errors?.length ? `<div class="chips">${res.errors.map(m => `<span class="chip no">Error: ${esc(m)}</span>`).join("")}</div>` : ""}
@@ -1057,6 +1178,7 @@ async function viewInterleave(params) {
           <input type="checkbox" value="${tp.id}" ${pre == tp.id ? "checked" : ""}>
           <div><h3><span class="dot"></span>${esc(tp.title)}</h3><p>${tp.stats.items} preguntas, ${pct(tp.stats.progress)} dominado</p></div>
         </label>`).join("")}</div>
+      <div style="margin-top:18px">${levelPicker()}</div>
       <div class="actions"><button class="btn primary big" id="go" disabled>Mezclar y practicar</button><span class="small muted" id="msg">Elegí al menos dos temas</span></div>`}
     </div>`;
   const update = () => {
@@ -1065,6 +1187,7 @@ async function viewInterleave(params) {
     if ($("#go")) { $("#go").disabled = n < 2; $("#msg").textContent = n < 2 ? "Elegí al menos dos temas" : `${n} temas`; }
   };
   $$(".result-item input").forEach(i => i.addEventListener("change", update));
+  bindLevelPicker();
   update();
   $("#go")?.addEventListener("click", () => startSession({
     mode: "interleaved", topic_ids: $$(".result-item input:checked").map(i => +i.value), n: 16, tech: "intercalada", back: "#/intercalada" }));
@@ -1165,4 +1288,5 @@ async function viewSettings() {
   });
 }
 
+pomoInit();
 route();
