@@ -1,0 +1,8 @@
+data/
+tests/
+**/__pycache__/
+*.pyc
+.env
+*.bat
+render.yaml
+README.md

@@ -1,0 +1,14 @@
+services:
+  estudio:
+    build: .
+    image: estudio-dunlosky:1.0
+    container_name: estudio-dunlosky
+    ports:
+      - "${PUERTO:-8000}:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=${TZ:-America/Argentina/Buenos_Aires}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-}
+    restart: unless-stopped

@@ -1,0 +1,17 @@
+# Configuración para Render (Blueprint). Render la lee sola al conectar el repositorio.
+services:
+  - type: web
+    name: estudio-dunlosky
+    runtime: docker
+    plan: free
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PUBLIC_MODE
+        value: "1"
+      - key: PORT
+        value: "10000"
+      - key: TZ
+        value: America/Argentina/Buenos_Aires

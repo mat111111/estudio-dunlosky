@@ -1,0 +1,16 @@
+La fotosíntesis es el proceso mediante el cual las plantas, las algas y algunas bacterias convierten la energía de la luz en energía química almacenada en la glucosa. Este proceso ocurre principalmente en los cloroplastos de las células de las hojas. La fotosíntesis es fundamental para la vida en la Tierra porque produce el oxígeno que respiran la mayoría de los seres vivos.
+Durante la fotosíntesis, las plantas absorben dióxido de carbono del aire a través de los estomas y agua del suelo a través de las raíces. La clorofila, un pigmento verde presente en los cloroplastos, captura la energía de la luz solar.
+
+== Fases de la fotosíntesis ==
+La fotosíntesis se divide en dos fases: la fase luminosa y la fase oscura, también llamada ciclo de Calvin. La fase luminosa ocurre en las membranas de los tilacoides y necesita luz directa. En esta fase se rompen las moléculas de agua, lo que libera oxígeno como subproducto.
+La fase oscura ocurre en el estroma del cloroplasto y no depende directamente de la luz. En el ciclo de Calvin, la enzima rubisco fija el dióxido de carbono para formar compuestos orgánicos. El ciclo de Calvin fue descubierto por Melvin Calvin en 1950, por lo que recibió el Premio Nobel de Química en 1961.
+
+== Factores que la afectan ==
+La intensidad de la luz influye en la velocidad de la fotosíntesis, ya que la fase luminosa necesita energía lumínica para producir ATP. La concentración de dióxido de carbono también es importante, porque es la materia prima del ciclo de Calvin. La temperatura afecta la actividad de las enzimas, por lo que temperaturas muy altas pueden reducir la velocidad del proceso.
+Las plantas C4, como el maíz y la caña de azúcar, desarrollaron un mecanismo para concentrar dióxido de carbono, lo que les permite ser más eficientes en climas cálidos. Las plantas CAM, como los cactus, abren sus estomas durante la noche para reducir la pérdida de agua.
+
+== Historia ==
+Jan Ingenhousz demostró en 1779 que las plantas necesitan luz para producir oxígeno. Joseph Priestley había observado antes que una planta podía restaurar el aire en el que una vela se había apagado. Jean Senebier mostró en 1782 que las plantas absorben dióxido de carbono durante el proceso.
+
+== Referencias ==
+Libro de biología, capítulo 3.
