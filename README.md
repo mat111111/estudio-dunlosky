@@ -1,8 +1,8 @@
 # Estudio Dunlosky
 
-Aplicación de estudio que funciona en tu navegador y se levanta con Docker. Escribís cualquier tema, la app busca la información en Wikipedia (o usa tus apuntes), genera preguntas a partir del texto, corrige tus respuestas comparándolas con la fuente y te hace practicar justo las partes en las que te equivocaste.
+Aplicación de estudio que funciona en tu navegador y se levanta con Docker. Escribís cualquier tema, la app busca la información en enciclopedias, libros de texto, artículos académicos y foros de programación (o usa tus apuntes), genera preguntas a partir del texto, corrige tus respuestas comparándolas con la fuente y te hace practicar justo las partes en las que te equivocaste.
 
-Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas y **exportación a PDF**.
+Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas, **cuentas con usuario y contraseña** y **guardado en PDF** del material y de las preguntas.
 
 ---
 
@@ -30,7 +30,8 @@ El contenedor se reinicia solo si reiniciás la computadora (mientras Docker Des
 
 ## Cómo se usa
 
-1. **Nuevo tema**: buscás un tema en Wikipedia (español o inglés) y elegís hasta 4 artículos para combinarlos. También podés pegar tus apuntes (si usás títulos con `#`, cada uno se vuelve una sección).
+0. **Creá tu cuenta**: la primera vez la app pide un usuario y una contraseña (mínimo 8 caracteres). Cada cuenta tiene sus propios temas, tareas y progreso.
+1. **Nuevo tema**: elegís el **área** (Programación, Redes, Matemática, Bases de datos, Sistemas operativos, Ciencias y salud u **Otros** para cualquier tema), escribís lo que querés estudiar y elegís hasta 4 resultados para combinarlos. También podés pegar tus apuntes (si usás títulos con `#`, cada uno se vuelve una sección).
 2. La app descarga el texto, lo divide en secciones y genera preguntas: completar, opción múltiple, verdadero o falso, definiciones y preguntas de “¿por qué?”.
 3. Elegís una técnica. Todas terminan en una prueba, porque recuperar la información de memoria es lo que más fija el aprendizaje.
 4. Cuando respondés, la app te muestra si está bien, la respuesta correcta escrita “en rojo” y **la oración exacta de la fuente** que lo respalda, con enlace a la versión del artículo que se usó.
@@ -70,10 +71,34 @@ Atajos de teclado en la práctica: `1`–`4` eligen una opción, `Enter` pasa a 
 
 Se elige en la página de cada tema y en la práctica intercalada; la app lo recuerda. Si no hay suficientes preguntas del nivel pedido, completa con el más cercano.
 
-### Exportar a PDF
-Desde cada tema, **Exportar PDF** genera un cuestionario con preguntas y respuestas, filtrado por nivel:
-- **Examen**: preguntas con espacio para responder y la clave de respuestas al final (para practicar en papel).
-- **Guía de estudio**: cada pregunta con su respuesta y la oración de la fuente que la respalda.
+### Conceptos clicables: «¿por qué?»
+En la pestaña **Leer** de cada tema, los conceptos clave aparecen subrayados con puntos. Al tocarlos se abre una ficha con:
+- lo que dice la fuente sobre ese concepto (la oración que lo define y dónde más aparece);
+- **por qué**: con IA activada, una explicación con qué es, por qué es así, un ejemplo y con qué se relaciona (basada en las oraciones de la fuente y guardada para no volver a gastar); sin IA, las oraciones de la fuente que dan la causa;
+- un botón para practicar ese concepto.
+
+Además, después de cada respuesta hay un botón **«¿Por qué es así?»** que explica la respuesta correcta (con IA) o muestra el contexto de la fuente.
+
+### Preguntas escritas por IA (recomendado)
+Con una clave de Gemini o Claude, la IA redacta el banco de preguntas de **todo** el tema (en bloques), con reglas de examen: preguntas con sus propias palabras (nunca oraciones copiadas ni espacios para completar), niveles 1 a 3, opciones incorrectas que son errores conceptuales plausibles y una explicación de cada respuesta. Cada pregunta pasa controles automáticos antes de guardarse: la cita que la respalda tiene que existir en la fuente, no puede copiar tramos largos del texto, la opción múltiple tiene que tener 4 opciones distintas con la correcta incluida, sin «todas/ninguna de las anteriores».
+
+Cuando un tema tiene suficientes preguntas de IA, las automáticas se ocultan (sin borrar tu progreso); se puede cambiar en **Ajustes → Qué preguntas mostrar**. En temas creados antes, usá **Generar preguntas con IA** en la página del tema. Para mejores preguntas conviene un modelo más capaz que el «lite» (por ejemplo `gemini-3.6-flash`).
+
+### Preguntas de opción múltiple conceptuales
+Además de las de completar (nivel básico), la app arma preguntas que validan ideas completas (nivel intermedio):
+- **«¿Cuál de estas afirmaciones es correcta?»** / **«¿cuál es INCORRECTA?»**: las opciones falsas son oraciones reales del tema con un dato cambiado por otro verosímil (por ejemplo, «fase luminosa» por «fase oscura», un año o un nombre por otro).
+- **«¿Por qué…?»** con causas reales de otras partes del tema como distractores.
+- Con IA: preguntas de aplicación y razonamiento cuyos distractores son errores conceptuales típicos, con explicación incluida.
+
+Para sumar este tipo de preguntas a un tema creado antes, usá **Generar preguntas nuevas** en la pestaña Fuentes (no borra tu progreso).
+
+### Guardar como PDF
+Desde cada tema, **Guardar PDF** abre un panel con tres opciones de contenido:
+- **Apunte**: todo el material generado o importado, ordenado por secciones con índice; lo que **resaltaste** aparece marcado en amarillo, se agregan **tus resúmenes** y un **glosario** con las explicaciones de los conceptos que abriste con «¿por qué?». Si el material lo escribió la IA, el PDF lo indica.
+- **Apunte + preguntas y respuestas**: lo anterior y, al final, las preguntas con su respuesta y la evidencia en la fuente.
+- **Solo preguntas y respuestas**, filtradas por nivel, en dos formatos:
+  - **Examen**: preguntas con espacio para responder y la clave de respuestas al final (para practicar en papel).
+  - **Guía de estudio**: cada pregunta con su respuesta y la oración de la fuente que la respalda.
 
 ---
 
@@ -98,10 +123,33 @@ Referencia: Dunlosky, J., Rawson, K. A., Marsh, E. J., Nathan, M. J. y Willingha
 
 ## De dónde sale la información y cómo se comprueba
 
+### Áreas de búsqueda
+Al buscar, elegís un área y la app consulta las fuentes más útiles para esa área (se pueden ajustar en **Fuentes de esta búsqueda**):
+
+| Área | Dónde busca |
+|---|---|
+| Programación | Wikipedia, Wikilibros, Stack Overflow (español e inglés), arXiv (computación) y la web |
+| Redes | Wikipedia, Wikilibros, Network Engineering y Server Fault (Stack Exchange), arXiv (redes) y la web |
+| Matemática | Wikipedia, Wikilibros, Wikiversidad, Mathematics (Stack Exchange) y arXiv (matemática) |
+| Bases de datos | Wikipedia, Wikilibros, Stack Overflow, Database Administrators (Stack Exchange) y arXiv (bases de datos) |
+| Sistemas operativos | Wikipedia, Wikilibros, Unix & Linux y Super User (Stack Exchange) y arXiv (sistemas operativos) |
+| Ciencias y salud | Wikipedia, OpenAlex, Europe PMC y la web |
+| Otros | Cualquier tema: enciclopedias, libros de texto, OpenAlex y la web |
+
+En los buscadores web (Google vía Gemini, Tavily, Brave) el área se agrega como contexto a la búsqueda, para que «árbol» en Programación traiga estructuras de datos y no botánica.
+
+### Fuentes
+
 - **Fuentes integradas** (se buscan todas a la vez, con su API oficial y licencia libre):
   - **Wikipedia** en español e inglés, y **Simple English Wikipedia** (explicaciones más sencillas);
   - **Wikilibros** y **Wikibooks**: libros de texto y manuales escritos de forma colaborativa;
   - **Wikiversidad**: cursos y material didáctico.
+- **Académicos (sin clave)**: **OpenAlex** (artículos de todo el mundo: resumen y, si es de acceso abierto, el texto), **arXiv** (computación, matemática y física: resumen y versión HTML cuando existe) y **Europe PMC** (biología y salud: resumen).
+- **Programación (sin clave)**: **Stack Overflow en español** y **Stack Overflow**: se importa la pregunta con sus respuestas más votadas (licencia CC BY-SA).
+- **Web con clave** (se cargan en Ajustes → Buscadores con clave): **Tavily** (1.000 búsquedas gratis por mes, sin tarjeta), **Brave Search** y **Web (vía Claude)**, que usa la búsqueda web de la API de Claude (se cobra aparte: US$10 cada 1.000 búsquedas).
+- La app recuerda qué buscadores dejaste marcados.
+- **Google** (si configuraste una clave de **Gemini**): la búsqueda usa la herramienta de búsqueda de Google de Gemini y muestra las páginas encontradas para importarlas. Se muestran las sugerencias de búsqueda de Google, como exige su servicio. Google cobra estas búsquedas aparte del modelo (tiene una cuota mensual gratuita).
+- **Generar con IA**: escribís el tema, el nivel y un enfoque opcional; la IA busca primero en Wikipedia, Wikilibros y Wikiversidad y escribe un **apunte basado en esos textos**. Las fuentes originales quedan guardadas en el tema y las preguntas se generan tanto del apunte como de las fuentes. El tema queda marcado como «apunte generado con IA».
 - **Cualquier página web** por su dirección: documentación, artículos, apuntes publicados. La app sugiere sitios recomendados (MDN, documentación de Python, cppreference, SciELO, Educ.ar, OpenStax). Las páginas que piden iniciar sesión o se arman con JavaScript no se pueden importar; en ese caso, copiá el texto y pegalo como apuntes.
 - En los wikis se guarda la **revisión exacta** del artículo, así cada corrección se hace contra ese texto aunque cambie después. Se descartan secciones como Referencias, Enlaces externos o Véase también.
 - **Cada pregunta está anclada a una oración** del texto descargado. Al corregir se muestra esa oración como evidencia.
@@ -113,14 +161,77 @@ Referencia: Dunlosky, J., Rawson, K. A., Marsh, E. J., Nathan, M. J. y Willingha
 
 Límites a tener en cuenta: la generación de preguntas y la corrección de respuestas abiertas son automáticas y se basan en el texto, no en entender el significado. Alguna pregunta puede salir rara o una respuesta correcta dicha con otras palabras puede marcarse como parcial; para eso está la autocorrección. Wikipedia es una buena puerta de entrada, pero para un examen siempre contrastá con la bibliografía de la materia.
 
-### Modo IA (opcional)
+### Modo IA (opcional): Claude o Gemini
 
-Si tenés una clave de la API de Anthropic, cargala en **Ajustes** (o en el archivo `.env`, ver `.env.example`). Con eso:
+Si tenés una clave de API de **Claude** (Anthropic) o de **Gemini** (Google), cargala en **Ajustes**: elegís el proveedor, pegás la clave, opcionalmente el modelo, y tocás **Probar conexión**. También se puede poner en el archivo `.env` (ver `.env.example`). Con eso:
 
 - las respuestas abiertas se corrigen por significado, siempre contra el fragmento de la fuente;
-- se suman preguntas de comprensión generadas por IA. **Cada pregunta debe citar un fragmento literal del artículo; si la cita no aparece en el texto descargado, se descarta.**
+- al crear un tema se suman preguntas de comprensión generadas por IA. **Cada pregunta debe citar un fragmento literal del artículo; si la cita no aparece en el texto descargado, se descarta.**
+
+Dónde sacar la clave:
+- **Claude**: https://platform.claude.com → API Keys. Se paga aparte de la suscripción de claude.ai.
+- **Gemini**: https://aistudio.google.com/apikey → Get API key, en un proyecto con facturación activada. La suscripción Google AI Pro no incluye la API.
+
+Los modelos más baratos (`claude-haiku-5-5`, `gemini-3.5-flash-lite`) alcanzan para esta app. Solo se consulta a la IA al corregir respuestas abiertas y al crear temas; las preguntas de opción múltiple, verdadero o falso y completar nunca la usan.
 
 Sin clave, todo lo demás funciona igual.
+
+---
+
+## Cuentas e inicio de sesión
+
+La app pide **usuario y contraseña**. Cada cuenta tiene su propia base de datos (`data/usuarios/<id>.db`): nadie puede ver los temas, tareas ni el progreso de otro. La primera cuenta que se crea **hereda los temas que ya tenías** antes de que existiera el login.
+
+Cómo se protege:
+- **Sin inyección SQL**: todas las consultas usan parámetros (`?`) de SQLite, así que lo que se escribe en usuario o contraseña nunca se mezcla con el SQL. Además, el usuario solo admite letras, números, punto, guion y guion bajo. Hay pruebas automáticas que intentan entrar con `' OR '1'='1`, `admin'--`, `; DROP TABLE users` y otras y verifican que fallan sin romper nada.
+- **Contraseñas con scrypt** y sal aleatoria: en la base nunca queda la contraseña, solo un hash lento de calcular.
+- **Sesión en cookie `HttpOnly` y `SameSite=Lax`** (y `Secure` cuando se usa https): JavaScript no puede leerla y otros sitios no pueden usarla. En la base se guarda solo el hash del token; dura 30 días o hasta que tocás **Salir**.
+- **Límite de intentos**: 5 contraseñas incorrectas seguidas bloquean ese usuario por 15 minutos (y 20 por dirección IP).
+- La respuesta tarda lo mismo si el usuario no existe, para no revelar qué cuentas hay.
+
+En **Ajustes → Tu cuenta** podés cambiar la contraseña (cierra las otras sesiones abiertas).
+
+**¿Olvidaste la contraseña?** No hay recuperación por correo. Quien administra el servidor la puede cambiar desde la terminal:
+
+```bash
+docker compose exec estudio python -m app.auth usuarios          # lista las cuentas
+docker compose exec estudio python -m app.auth reset TU_USUARIO  # pide la nueva contraseña
+```
+
+Variables de entorno (en `.env` o en Render):
+- `ALLOW_SIGNUP=0`: nadie más puede crear cuentas (la primera siempre se puede crear). Útil si la publicás y querés que sea solo para vos y quienes vos crees.
+- `AUTH=0`: desactiva el login (vuelve al funcionamiento anterior, sin cuentas). Solo para uso local.
+
+---
+
+## Subirla a GitHub
+
+Necesitás **Git** (https://git-scm.com/download/win) y una cuenta en GitHub. El archivo `.gitignore` ya excluye la carpeta `data/` (tus bases de datos y cuentas) y el archivo `.env` (tus claves): **nunca los subas**.
+
+**Si ya la habías subido antes** (actualizar el repositorio): copiá los archivos nuevos encima de la carpeta del repositorio, y en una terminal dentro de esa carpeta:
+
+```bash
+git status                      # revisá que NO aparezcan data/ ni .env
+git add .
+git commit -m "Login seguro, áreas de búsqueda y apunte en PDF"
+git push
+```
+
+**Si es la primera vez**: creá un repositorio vacío en https://github.com/new (sin README) y después:
+
+```bash
+git init
+git add .
+git status                      # revisá que NO aparezcan data/ ni .env
+git commit -m "Estudio Dunlosky"
+git branch -M main
+git remote add origin https://github.com/TU_USUARIO/estudio-dunlosky.git
+git push -u origin main
+```
+
+La primera vez que hagas `push`, Windows abre una ventana para iniciar sesión en GitHub.
+
+Si por error subiste una clave, borrarla del repositorio no alcanza (queda en el historial): **revocala** en la página del proveedor y creá otra.
 
 ---
 
@@ -128,15 +239,18 @@ Sin clave, todo lo demás funciona igual.
 
 El repositorio incluye `render.yaml`, que Render lee solo. En Render: **New → Blueprint**, elegís este repositorio y confirmás. Queda en un link `https://estudio-dunlosky-xxxx.onrender.com`.
 
-En esa versión se activa el **modo público** (`PUBLIC_MODE=1`):
-- cada visitante recibe su propio espacio (cookie + base de datos separada): nadie ve los temas de otro;
-- la clave de IA no se puede cargar ni cambiar desde la interfaz (solo como variable de entorno en Render, y la pagarías vos).
+Si ya estaba publicada, Render se actualiza sola cada vez que hacés `git push` (tarda unos minutos).
 
-Límites del plan gratuito: el servicio se duerme tras unos minutos sin visitas y tarda alrededor de un minuto en despertar, y el disco no es permanente, así que los datos de los visitantes se borran al reiniciarse.
+En esa versión se activa el **modo público** (`PUBLIC_MODE=1`):
+- cada persona crea su cuenta y tiene su propio espacio: nadie ve los temas de otro;
+- la clave de IA no se puede cargar ni cambiar desde la interfaz (solo como variable de entorno en Render, y la pagarías vos), así que no conviene ponerla en una versión abierta a cualquiera;
+- si querés que solo entren las personas que vos invites, agregá en Render la variable `ALLOW_SIGNUP=0` después de crear las cuentas.
+
+Límites del plan gratuito: el servicio se duerme tras unos minutos sin visitas y tarda alrededor de un minuto en despertar, y **el disco no es permanente**: cuando Render reinicia el servicio (por ejemplo, en cada `git push`) se borran las cuentas y los temas. Para conservarlos hace falta un plan pago con disco persistente montado en `/data`.
 
 ## Tus datos
 
-Se guardan en la carpeta **`data`** (archivo `estudio.db`, SQLite). Para hacer una copia de seguridad, copiá esa carpeta. Borrar el contenedor o la imagen de Docker no borra tus datos.
+Se guardan en la carpeta **`data`** (SQLite): `auth.db` tiene las cuentas (contraseñas con hash) y `usuarios/` una base por cuenta con sus temas y progreso. Para hacer una copia de seguridad, copiá esa carpeta. Borrar el contenedor o la imagen de Docker no borra tus datos.
 
 ## Cambiar el puerto
 
@@ -150,8 +264,10 @@ Si el 8000 está ocupado, copiá `.env.example` como `.env` y cambiá `PUERTO=80
 estudio-dunlosky/
 ├── app/
 │   ├── main.py        API (FastAPI): temas, sesiones, corrección, técnicas, panel
+│   ├── auth.py        Cuentas, contraseñas (scrypt), sesiones y límite de intentos
 │   ├── sources.py     Wikis (búsqueda y descarga), páginas web por URL y apuntes propios
-│   ├── export_pdf.py  Cuestionarios en PDF
+│   ├── search_providers.py  OpenAlex, arXiv, Europe PMC, Stack Exchange, Tavily, Brave y áreas de búsqueda
+│   ├── export_pdf.py  Apunte y cuestionarios en PDF
 │   ├── textproc.py    Oraciones, normalización, palabras y oraciones clave
 │   ├── generator.py   Generación de preguntas ancladas a la fuente
 │   ├── grader.py      Corrección de respuestas, resúmenes, subrayados y explicaciones
@@ -159,7 +275,7 @@ estudio-dunlosky/
 │   ├── ai.py          Modo IA opcional (con verificación de citas)
 │   ├── db.py          Esquema y acceso a SQLite
 │   └── static/        Interfaz sin frameworks: index.html, styles.css, app.js,
-│                      pomodoro.js (temporizador y sonidos) y tasks.js (tareas)
+│                      pomodoro.js (temporizador y sonidos), tasks.js (tareas) y concepts.js (fichas «¿por qué?»)
 ├── tests/             Pruebas automáticas (no necesitan internet)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -185,4 +301,6 @@ python -m unittest discover tests
 - **“Docker Desktop no está abierto”**: abrilo desde el menú Inicio y esperá a que termine de arrancar.
 - **“No se pudo conectar con Wikipedia”**: la app necesita internet para buscar y descargar artículos. Una vez creado el tema, se puede estudiar sin conexión.
 - **No abre en el navegador**: entrá a mano a http://localhost:8000. Si sigue sin abrir, ejecutá `docker compose logs` en la carpeta del proyecto para ver el error.
+- **Pide iniciar sesión otra vez**: la sesión dura 30 días; también se cierra al cambiar la contraseña. En Render gratis, cada reinicio borra las cuentas (ver más arriba).
+- **«Demasiados intentos fallidos»**: esperá 15 minutos o cambiá la contraseña desde la terminal (sección *Cuentas*).
 - **Docker pide activar WSL 2 o la virtualización**: seguí el asistente de Docker Desktop; es un requisito de Docker en Windows.

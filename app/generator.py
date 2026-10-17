@@ -144,6 +144,107 @@ def _relate_pair(sentence: str, strong: list[str], used: set) -> tuple[str, str]
     return None
 
 
+def _falsify(sentence: str, keywords: dict, title: str, dis: "Distractors") -> str | None:
+    """Cambia un dato de la oración por otro creíble del mismo tema para obtener una afirmación falsa.
+
+    Solo se usan cambios verosímiles: años, nombres propios por otros del mismo tipo y conceptos
+    "hermanos" (que aparecen después de la misma palabra, como «fase luminosa» / «fase oscura»).
+    """
+    terms = [(t, i) for t, i in tp.find_terms_in_sentence(sentence, keywords)
+             if tp.normalize(t) not in tp.normalize(title)]
+    terms.sort(key=lambda ti: ({"year": 0, "proper": 1, "concept": 2}.get(ti[1]["kind"], 3), -ti[1]["weight"]))
+    low = tp.strip_accents(sentence.lower())
+    for term, info in terms:
+        kind = info["kind"]
+        alts: list[str] = []
+        if kind in ("year", "proper"):
+            alts = dis.pick(term, kind, sentence, 3)
+            if kind == "proper":
+                # personas por personas (nombres de 2+ palabras) o siglas por siglas
+                alts = [a for a in alts if len(a.split()) == len(term.split())
+                        and (len(term.split()) >= 2 or (term.isupper() and a.isupper()))]
+        elif kind == "concept":
+            m = re.search(rf"([a-zñ]+)\s+{re.escape(tp.strip_accents(term.lower()))}\b", low)
+            before = m.group(1) if m else None
+            if not before:
+                continue
+            for cand, ci in keywords.items():
+                if (ci["kind"] == "concept" and tp.normalize(cand) != tp.normalize(term)
+                        and before in ci.get("prev", []) and cand[-1:] == term[-1:]
+                        and tp.normalize(cand) not in tp.normalize(sentence)):
+                    alts.append(cand)
+        for alt in alts:
+            out = re.sub(rf"(?<![\wáéíóúñü]){re.escape(term)}(?![\wáéíóúñü])", alt, sentence, count=1)
+            if out != sentence:
+                return out
+    return None
+
+
+def _statement_mcs(sentences: list[str], keywords: dict, title: str, dis: "Distractors",
+                   rng: random.Random) -> list[dict]:
+    """Opción múltiple conceptual: elegir la afirmación correcta (o la incorrecta) entre cuatro.
+
+    En vez de completar una palabra, obliga a validar ideas completas del texto: las opciones
+    falsas son oraciones reales del tema con un concepto cambiado.
+    """
+    pool = [i for i, s in enumerate(sentences)
+            if _eligible(s) and 7 <= tp.word_count(s) <= 32 and not tp.PRONOUN_START.match(s)
+            and tp.find_terms_in_sentence(s, keywords)]
+    if len(pool) < 4:
+        return []
+    out = []
+    count = max(1, len(pool) // 4)
+    rng.shuffle(pool)
+    falsified = {i: _falsify(sentences[i], keywords, title, dis) for i in pool}
+    can_lie = [i for i in pool if falsified[i]]
+    used: set[int] = set()
+    for k in range(count):
+        if k % 2 == 0:
+            # una correcta y tres falsas (las falsas son otras oraciones del texto, alteradas)
+            liars = [i for i in can_lie if i not in used][:3]
+            target = next((i for i in pool if i not in used and i not in liars), None)
+            if len(liars) < 3 or target is None:
+                continue
+            opts = [falsified[i] for i in liars] + [sentences[target]]
+            rng.shuffle(opts)
+            out.append({"kind": "mc", "prompt": "Según el texto, ¿cuál de estas afirmaciones es correcta?",
+                        "answer": sentences[target], "options": opts, "context": sentences[target],
+                        "sentence_idx": target, "hint": None, "term_kind": "statement", "level": 2})
+            used.update(liars + [target])
+        else:
+            # tres correctas y una falsa
+            target = next((i for i in can_lie if i not in used), None)
+            trues = [i for i in pool if i != target and i not in used][:3]
+            if target is None or len(trues) < 3:
+                continue
+            opts = [sentences[i] for i in trues] + [falsified[target]]
+            rng.shuffle(opts)
+            out.append({"kind": "mc", "prompt": "Según el texto, ¿cuál de estas afirmaciones es INCORRECTA?",
+                        "answer": falsified[target], "options": opts, "context": sentences[target],
+                        "sentence_idx": target, "hint": None, "term_kind": "statement", "level": 2})
+            used.update(trues + [target])
+    return out
+
+
+def cause_mcs(items: list[dict], rng: random.Random) -> list[dict]:
+    """Opción múltiple sobre causas: «¿Por qué…?» con causas reales de otras partes del tema como distractores."""
+    whys = [i for i in items if i["kind"] == "why" and i.get("origin", "auto") == "auto"
+            and i["prompt"].startswith("¿Por qué")]
+    if len(whys) < 4:
+        return []
+    out = []
+    for it in whys:
+        others = [w["answer"] for w in whys if w is not it and tp.normalize(w["answer"]) != tp.normalize(it["answer"])]
+        if len(others) < 3:
+            continue
+        opts = rng.sample(others, 3) + [it["answer"]]
+        rng.shuffle(opts)
+        out.append({**{k: it.get(k) for k in ("prompt", "context", "sentence_idx", "section_id")},
+                    "kind": "mc", "answer": it["answer"], "options": opts, "hint": None,
+                    "term_kind": "cause", "level": 2, "origin": "auto"})
+    return out
+
+
 def _eligible(sentence: str) -> bool:
     wc = tp.word_count(sentence)
     if wc < 6 or wc > 50:
@@ -202,7 +303,7 @@ def generate_for_section(section_text: str, keywords: dict[str, dict], title: st
                 cause = me.group("cause").strip().rstrip(",")
                 items.append({
                     "kind": "why",
-                    "prompt": f"Sabiendo que {cause[0].lower() + cause[1:]}, ¿qué consecuencia tuvo o qué implica?",
+                    "prompt": f"¿Qué consecuencia tiene que {cause[0].lower() + cause[1:]}?",
                     "answer": _match_case(me.group("rest")),
                     "context": s, "sentence_idx": idx, "hint": None, "options": None,
                 })
@@ -268,6 +369,8 @@ def generate_for_section(section_text: str, keywords: dict[str, dict], title: st
                             "hint": None,
                         })
 
+    items.extend(_statement_mcs(sentences, keywords, title, dis, rng))
+
     for it in items:
         it.setdefault("level", level_for(it))
 
@@ -310,6 +413,8 @@ def level_for(item: dict) -> int:
     3 Avanzado: explicar causas y relacionar conceptos.
     """
     kind = item.get("kind")
+    if kind == "mc" and item.get("term_kind") in ("statement", "cause"):
+        return 2
     if kind in ("tf", "mc"):
         return 1
     if kind in ("why", "relate"):

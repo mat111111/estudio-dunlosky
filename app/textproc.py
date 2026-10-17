@@ -225,8 +225,21 @@ def extract_keywords(sentences: list[str], title: str = "", limit: int = 80) -> 
         form = surface.get(tok, Counter({tok: 1})).most_common(1)[0][0]
         result.setdefault(form, {"weight": w, "kind": "concept", "count": c})
 
-    ranked = sorted(result.items(), key=lambda kv: -kv[1]["weight"])[:limit]
-    return dict(ranked)
+    ranked = dict(sorted(result.items(), key=lambda kv: -kv[1]["weight"])[:limit])
+    # palabra que precede a cada término ("fase luminosa" / "fase oscura"): sirve para encontrar
+    # conceptos "hermanos" que se pueden intercambiar para armar afirmaciones falsas creíbles
+    norm_sents = [strip_accents(x.lower()) for x in sentences]
+    for term, info in ranked.items():
+        if info["kind"] != "concept":
+            continue
+        prev = Counter()
+        pat = re.compile(rf"([a-zñ]+)\s+{re.escape(strip_accents(term.lower()))}\b")
+        for ns in norm_sents:
+            for m in pat.finditer(ns):
+                if m.group(1) not in ("el", "la", "los", "las", "un", "una", "de", "del", "y", "e", "o", "en", "a", "al", "que", "su", "sus"):
+                    prev[m.group(1)] += 1
+        info["prev"] = [w for w, _ in prev.most_common(3)]
+    return ranked
 
 
 def find_terms_in_sentence(sentence: str, keywords: dict[str, dict]) -> list[tuple[str, dict]]:

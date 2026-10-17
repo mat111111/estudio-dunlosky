@@ -1,6 +1,9 @@
-"""Exportación de un tema a PDF: cuestionario con preguntas y respuestas.
+"""Exportación de un tema a PDF.
 
-Dos formatos:
+  - Apunte (build_notes_pdf): el material de estudio generado (texto de cada sección, lo que
+    resaltaste, tus resúmenes y un glosario con las explicaciones de conceptos), opcionalmente
+    seguido de las preguntas con sus respuestas.
+  - Cuestionario (build_pdf), en dos formatos:
   - "examen": primero todas las preguntas (con espacio para responder) y al final la
     clave de respuestas. Sirve para practicar en papel (autoevaluación).
   - "estudio": cada pregunta seguida de su respuesta y de la evidencia en la fuente.
@@ -19,6 +22,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
@@ -52,6 +56,9 @@ def _register_fonts() -> None:
         pdfmetrics.registerFont(regular)
         pdfmetrics.registerFont(TTFont("Vera-Bold", os.path.join(folder, "VeraBd.ttf")))
         pdfmetrics.registerFont(TTFont("Vera-Italic", os.path.join(folder, "VeraIt.ttf")))
+        pdfmetrics.registerFont(TTFont("Vera-BoldItalic", os.path.join(folder, "VeraBI.ttf")))
+        # para que <b> e <i> dentro de los párrafos usen las variantes correctas
+        registerFontFamily("Vera", normal="Vera", bold="Vera-Bold", italic="Vera-Italic", boldItalic="Vera-BoldItalic")
         _FONT, _FONT_B, _FONT_I = "Vera", "Vera-Bold", "Vera-Italic"
         _GLYPHS = set(regular.face.charToGlyph.keys())
     except Exception:  # noqa: BLE001 - si falla, Helvetica (sin algunos símbolos)
@@ -90,7 +97,8 @@ def _styles() -> dict:
     }
 
 
-def _question_block(n: int, it: dict, st: dict, with_answer: bool) -> list:
+def _question_block(n: int, it: dict, st: dict, with_answer: bool, lead=None) -> list:
+    """lead: título de sección que tiene que quedar en la misma página que la primera pregunta."""
     tag = f'<font color="#7A839C" size="8.5">{_t(KIND_LABEL.get(it["kind"], ""))}, {_t(LEVELS.get(it["level"], ""))}</font>'
     prompt = _t(it["prompt"]).replace("_____", "__________")
     parts = [Paragraph(f"<b>{n}.</b> {prompt}<br/>{tag}", st["q"])]
@@ -109,7 +117,7 @@ def _question_block(n: int, it: dict, st: dict, with_answer: bool) -> list:
         if it.get("context") and it["context"] != it["answer"]:
             parts.append(Paragraph(f"Fuente: «{_t(it['context'])}»", st["ev"]))
     parts.append(Spacer(1, 9))
-    return [KeepTogether(parts)]
+    return [KeepTogether(([lead] if lead is not None else []) + parts)]
 
 
 def _answer_text(it: dict) -> str:
@@ -162,11 +170,11 @@ def build_pdf(topic: dict, sources: list[dict], sections: list[dict], items_by_s
         its = items_by_section.get(sec["id"], [])
         if not its:
             continue
-        story.append(Paragraph(_t(sec["title"]), st["h2"]))
-        for it in its:
+        head = Paragraph(_t(sec["title"]), st["h2"])
+        for j, it in enumerate(its):
             n += 1
             numbered.append((n, it))
-            story.extend(_question_block(n, it, st, with_answer=(layout == "estudio")))
+            story.extend(_question_block(n, it, st, with_answer=(layout == "estudio"), lead=head if j == 0 else None))
 
     if layout == "examen" and numbered:
         story.append(PageBreak())
@@ -186,3 +194,108 @@ def build_pdf(topic: dict, sources: list[dict], sections: list[dict], items_by_s
 
 def _plain(text: str) -> str:
     return "".join(ch if ord(ch) in (_GLYPHS or set()) else "?" for ch in text)
+
+
+def _on_page(title: str):
+    def draw(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(_FONT, 8)
+        canvas.setFillColor(INK3)
+        canvas.drawString(18 * mm, 10 * mm, _plain(f"{title}  |  Estudio Dunlosky"))
+        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Página {doc.page}")
+        canvas.restoreState()
+    return draw
+
+
+def _sources_block(sources: list[dict], st: dict) -> list:
+    if not sources:
+        return []
+    lines = []
+    for s in sources:
+        line = f"{s['name']}: {s['title']}"
+        if s.get("url"):
+            line += f" ({s['url']})"
+        if s.get("license"):
+            line += f", licencia {s['license']}"
+        lines.append(_t(line))
+    return [Paragraph("Fuentes: " + "<br/>".join(lines), st["meta"])]
+
+
+def build_notes_pdf(topic: dict, sources: list[dict], sections: list[dict], glossary: list[dict],
+                    ai_generated: bool = False, questions: dict | None = None) -> bytes:
+    """Apunte de estudio.
+
+    sections: [{"id", "title", "paragraphs": [[(oración, resaltada), ...], ...], "summary": str|None}]
+    glossary: [{"term", "que_es", "por_que", "ejemplo", "relacion"}]
+    questions: {section_id: [items]} para agregar preguntas y respuestas al final (opcional).
+    """
+    _register_fonts()
+    st = _styles()
+    body = ParagraphStyle("body", parent=st["q"], fontSize=10.5, leading=15.5, spaceAfter=7)
+    mine = ParagraphStyle("mine", parent=st["ev"], leftIndent=10, borderPadding=(6, 8, 6, 8),
+                          backColor=colors.HexColor("#F3F5FA"), borderColor=LINE, borderWidth=0.5,
+                          spaceBefore=4, spaceAfter=10, fontName=_FONT_I, fontSize=10, leading=14)
+    gterm = ParagraphStyle("gterm", parent=st["q"], fontName=_FONT_B, spaceBefore=8, keepWithNext=1)
+    gtext = ParagraphStyle("gtext", parent=st["q"], leftIndent=12, fontSize=10, leading=14, spaceAfter=2)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm,
+                            bottomMargin=18 * mm, title=_plain(topic["title"]), author="Estudio Dunlosky",
+                            subject="Apunte de estudio")
+    story: list = [Paragraph(_t(topic["title"]), st["title"]), Spacer(1, 4)]
+    intro = "Apunte de estudio con el material del tema"
+    if any(any(h for para in s["paragraphs"] for _, h in para) for s in sections):
+        intro += "; lo que resaltaste aparece marcado en amarillo"
+    story.append(Paragraph(_t(intro + "."), st["sub"]))
+    story.append(Spacer(1, 6))
+    if ai_generated:
+        story.append(Paragraph(_t("Material redactado por inteligencia artificial: contrastalo con las fuentes "
+                                  "antes de darlo por cierto."), st["meta"]))
+    story += _sources_block(sources, st)
+    story.append(Paragraph(_t(f"Generado el {datetime.now().strftime('%d/%m/%Y')}."), st["meta"]))
+    story.append(Spacer(1, 6))
+
+    # Índice breve
+    if len(sections) > 2:
+        story.append(Paragraph("Contenido", st["h2"]))
+        for i, sec in enumerate(sections, 1):
+            story.append(Paragraph(f"{i}. {_t(sec['title'])}", st["opt"]))
+        if glossary:
+            story.append(Paragraph(f"{len(sections) + 1}. Glosario", st["opt"]))
+
+    for i, sec in enumerate(sections, 1):
+        story.append(Paragraph(f"{i}. {_t(sec['title'])}", st["h2"]))
+        for para in sec["paragraphs"]:
+            parts = []
+            for sent, hl in para:
+                txt = _t(sent)
+                parts.append(f'<span backColor="#FFF3B0">{txt}</span>' if hl else txt)
+            story.append(Paragraph(" ".join(parts), body))
+        if sec.get("summary"):
+            story.append(Paragraph(f"<b>Tu resumen:</b> {_t(sec['summary'])}", mine))
+
+    if glossary:
+        story.append(Paragraph("Glosario", st["h2"]))
+        labels = (("que_es", "Qué es"), ("por_que", "Por qué"), ("ejemplo", "Ejemplo"), ("relacion", "Relación"))
+        for g in glossary:
+            block = [Paragraph(_t(g["term"][:1].upper() + g["term"][1:]), gterm)]
+            for key, lab in labels:
+                if g.get(key):
+                    block.append(Paragraph(f"<b>{lab}:</b> {_t(g[key])}", gtext))
+            story.append(KeepTogether(block))
+
+    if questions and any(questions.values()):
+        story.append(PageBreak())
+        story.append(Paragraph("Preguntas y respuestas", st["title"]))
+        story.append(Spacer(1, 8))
+        n = 0
+        for sec in sections:
+            its = questions.get(sec["id"], [])
+            if not its:
+                continue
+            head = Paragraph(_t(sec["title"]), st["h2"])
+            for j, it in enumerate(its):
+                n += 1
+                story.extend(_question_block(n, it, st, with_answer=True, lead=head if j == 0 else None))
+
+    doc.build(story, onFirstPage=_on_page(topic["title"]), onLaterPages=_on_page(topic["title"]))
+    return buf.getvalue()

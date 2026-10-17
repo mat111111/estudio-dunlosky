@@ -8,7 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
+os.environ.setdefault("DB_PATH", os.path.join(tempfile.mkdtemp(), "test.db"))
+os.environ.setdefault("AUTH", "0")  # estas pruebas usan la app sin login; el login se prueba en test_seguridad
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -120,6 +121,27 @@ class TestNuevasFunciones(unittest.TestCase):
                 self.assertEqual(r.status_code, 200)
                 self.assertTrue(r.content.startswith(b"%PDF"))
 
+    def test_exportar_apunte_pdf(self):
+        import json as _json
+        from app import db as _db
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Apunte", "notes": {"title": "P", "text": MUESTRA}}).json()["id"]
+            sec = c.get(f"/api/topics/{tid}").json()["sections"][0]["id"]
+            c.post("/api/highlight", json={"section_id": sec, "selected": [0, 1]})
+            c.post("/api/summary", json={"section_id": sec, "text": "Mi resumen propio del tema."})
+            with _db.tx() as con:
+                con.execute("INSERT INTO concept_cache(topic_id, term, content, created_at) VALUES(?,?,?,?)",
+                            (tid, "fotosintesis", _json.dumps({"que_es": "Proceso", "por_que": "Energía"}), "2026-01-01"))
+            for content in ("apunte", "ambos"):
+                r = c.get(f"/api/topics/{tid}/export.pdf?content={content}")
+                self.assertEqual(r.status_code, 200)
+                self.assertTrue(r.content.startswith(b"%PDF"))
+                self.assertIn("_apunte.pdf", r.headers["content-disposition"])
+            # el apunte con preguntas es más largo que el apunte solo
+            solo = c.get(f"/api/topics/{tid}/export.pdf?content=apunte").content
+            ambos = c.get(f"/api/topics/{tid}/export.pdf?content=ambos").content
+            self.assertGreater(len(ambos), len(solo))
+
     def test_tareas_y_pomodoros(self):
         with TestClient(app) as c:
             t = c.post("/api/tasks", json={"title": "Parcial", "horizon": "mes", "due_date": "2099-01-10"}).json()
@@ -144,6 +166,33 @@ class TestNuevasFunciones(unittest.TestCase):
     def test_no_descarga_direcciones_internas(self):
         with self.assertRaises(sources.SourceError):
             sources._check_public_host("http://127.0.0.1:8000/")
+
+
+class TestConceptosYExplicaciones(unittest.TestCase):
+    def test_opcion_multiple_conceptual(self):
+        secs = sources.parse_sections(sources.clean_extract(MUESTRA), "Fotosíntesis")
+        _, items = generator.generate_topic_items(secs, "Fotosíntesis", 5)
+        conceptuales = [i for s in items for i in s if i.get("term_kind") == "statement"]
+        self.assertTrue(conceptuales)
+        for it in conceptuales:
+            self.assertEqual(len(set(it["options"])), 4)
+            self.assertIn(it["answer"], it["options"])
+            self.assertEqual(it["level"], 2)
+
+    def test_conceptos_y_por_que_sin_ia(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "C", "notes": {"title": "C", "text": MUESTRA}}).json()["id"]
+            terms = c.get(f"/api/topics/{tid}/concepts").json()["terms"]
+            self.assertIn("estomas", terms)
+            self.assertNotIn("convierten", terms)
+            d = c.get(f"/api/topics/{tid}/concept", params={"term": "oxígeno"}).json()
+            self.assertTrue(d["definition"])
+            self.assertTrue(d["mentions"])
+            item = c.post("/api/session", json={"mode": "practice", "topic_ids": [tid], "n": 1}).json()["items"][0]
+            ex = c.post(f"/api/items/{item['id']}/explain").json()
+            self.assertTrue(ex["around"])
+            r = c.post(f"/api/topics/{tid}/enrich").json()
+            self.assertGreaterEqual(r["added"], 0)
 
 
 if __name__ == "__main__":

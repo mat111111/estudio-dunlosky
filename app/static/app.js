@@ -20,6 +20,10 @@ async function api(path, opts = {}) {
   const r = await fetch(path, init);
   let data = null;
   try { data = await r.json(); } catch (e) { /* sin cuerpo */ }
+  if (r.status === 401 && !path.startsWith("/api/auth/")) {
+    viewLogin();  // la sesión venció o se cerró en otro lado
+    throw new Error("Iniciá sesión para continuar.");
+  }
   if (!r.ok) {
     const msg = data && (typeof data.detail === "string" ? data.detail : "Datos inválidos");
     throw new Error(msg || `Error ${r.status}`);
@@ -342,21 +346,33 @@ async function viewNew(params) {
   setTitle("Nuevo tema");
   const addTo = params.get("agregar");
   const selected = new Map();  // clave → {site,title,url,label,source}
-  const tab = ["notas", "web"].includes(params.get("tab")) ? params.get("tab") : "buscar";
+  const tab = ["notas", "web", "ia"].includes(params.get("tab")) ? params.get("tab") : "buscar";
   let sites = [];
-  try { sites = await api("/api/sources"); } catch (e) { /* lista por defecto */ }
-  const active = new Set(sites.filter(s => s.default).map(s => s.site));
+  let cats = [];
+  try { [sites, cats] = await Promise.all([api("/api/sources"), api("/api/categories")]); } catch (e) { /* lista por defecto */ }
+  let category = null;
+  try { category = localStorage.getItem("categoria"); } catch (e) { /* nada */ }
+  if (!cats.some(c => c.key === category)) category = "otros";
+  // la selección de buscadores se recuerda en este navegador
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("buscadores") || "null"); } catch (e) { /* sin almacenamiento */ }
+  const avail = new Set(sites.filter(s => s.available !== false).map(s => s.site));
+  const catSites = key => (cats.find(c => c.key === key) || { sites: [] }).sites;
+  const active = new Set((saved || catSites(category) || sites.filter(s => s.default).map(s => s.site)).filter(x => avail.has(x)));
+  const saveActive = () => { try { localStorage.setItem("buscadores", JSON.stringify([...active])); } catch (e) { /* nada */ } };
+  const GROUPS = [...new Set(sites.map(s => s.group || "Otros"))];
 
   main.innerHTML = `
     <div class="page narrow">
       <div class="page-head">
         <h1>${addTo ? "Agregar otra fuente" : "Nuevo tema"}</h1>
         <p class="lead">${addTo ? "Sumá otro artículo, una página web o tus apuntes al mismo tema: las preguntas se van a mezclar."
-          : "Buscá en enciclopedias y libros de texto abiertos, importá una página de estudio o pegá tus apuntes. Podés combinar hasta cuatro fuentes."}</p>
+          : "Buscá en enciclopedias, libros de texto, artículos académicos, foros de programación y la web; importá una página o pegá tus apuntes. Podés combinar hasta cuatro fuentes."}</p>
       </div>
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="buscar" aria-selected="${tab === "buscar"}">Buscar en fuentes</button>
         <button role="tab" data-tab="web" aria-selected="${tab === "web"}">Desde una página web</button>
+        <button role="tab" data-tab="ia" aria-selected="${tab === "ia"}">Generar con IA</button>
         <button role="tab" data-tab="notas" aria-selected="${tab === "notas"}">Pegar mis apuntes</button>
       </div>
 
@@ -365,10 +381,19 @@ async function viewNew(params) {
           <input class="input" name="q" placeholder="Escribí el tema que querés estudiar" aria-label="Tema" required minlength="2" value="${esc(params.get("q") || "")}">
           <button class="btn primary big">Buscar</button>
         </form>
-        <div class="src-chips" role="group" aria-label="Dónde buscar">
-          <span class="small muted">Buscar en:</span>
-          ${sites.map(s => `<label class="src-chip" title="${esc(s.about)}"><input type="checkbox" value="${s.site}" ${active.has(s.site) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}
-        </div>
+        ${cats.length ? `<div class="cat-row" role="group" aria-label="Área del tema">
+          <span class="small muted">¿De qué área es?</span>
+          <div class="seg cat-seg">${cats.map(c => `<button type="button" data-cat="${c.key}" aria-pressed="${c.key === category}">${esc(c.label)}</button>`).join("")}</div>
+        </div>` : ""}
+        <details class="src-details"><summary>Fuentes de esta búsqueda (<span id="src-count">${active.size}</span>)</summary>
+        <div class="src-panel">
+          ${GROUPS.map(g => `
+            <div class="src-row"><span class="src-group-name">${esc(g)}</span>
+              <div class="src-chips" role="group" aria-label="${esc(g)}">
+                ${sites.filter(s => (s.group || "Otros") === g).map(s => `<label class="src-chip ${s.available === false ? "off" : ""}" title="${esc(s.available === false ? (s.why_off || "No disponible") : s.about)}"><input type="checkbox" value="${s.site}" ${active.has(s.site) ? "checked" : ""} ${s.available === false ? "disabled" : ""}> ${esc(s.name)}</label>`).join("")}
+              </div></div>`).join("")}
+          ${sites.some(s => s.available === false) ? `<p class="small muted">Los buscadores en gris necesitan una clave: se cargan en <a href="#/ajustes">Ajustes</a>.</p>` : ""}
+        </div></details>
         <div id="results" class="stack" style="--gap:22px;margin-top:22px"></div>
       </section>
 
@@ -383,6 +408,25 @@ async function viewNew(params) {
           <li><div class="grow"><b>${esc(r.name)}</b><div class="small muted">${esc(r.about)}</div></div>
           <a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">Abrir sitio</a></li>`).join("")}</ul>
         <p class="small muted" style="margin-top:10px">Buscá ahí la página que necesitás, copiá su dirección y pegala arriba.</p>
+      </section>
+
+      <section id="tab-ia" ${tab === "ia" ? "" : "hidden"}>
+        ${STATUS.ai_enabled ? `
+        <form id="ia-form" class="stack">
+          <label class="field"><span>¿Sobre qué querés el apunte?</span>
+            <input class="input" name="query" required minlength="2" maxlength="200" placeholder="Por ejemplo: planificación de procesos en sistemas operativos"></label>
+          <div class="row" style="align-items:flex-end">
+            <label class="field"><span>Nivel</span><select class="input" name="level">
+              <option value="basico">Básico: desde cero, con ejemplos simples</option>
+              <option value="intermedio" selected>Intermedio: nivel universitario</option>
+              <option value="avanzado">Avanzado: preparación de examen</option></select></label>
+          </div>
+          <label class="field"><span>Enfoque (opcional)</span>
+            <textarea class="input" name="focus" maxlength="500" style="min-height:80px" placeholder="Por ejemplo: para el parcial de AySO, con foco en los algoritmos FIFO, SJF y Round Robin"></textarea></label>
+          <p class="callout info small">La IA (${esc(STATUS.label)}) busca primero en Wikipedia, Wikilibros y Wikiversidad, y escribe el apunte <b>basándose en esos textos</b>. Las fuentes originales quedan guardadas en el tema para que puedas comprobar cualquier dato.</p>
+          <div class="actions"><button class="btn primary big">Generar apunte y preguntas</button><span class="small muted" id="ia-msg"></span></div>
+        </form>` : `<div class="empty"><h3>Necesitás activar la IA</h3><p class="muted">Configurá tu clave de Gemini o de Claude en Ajustes para generar apuntes de estudio.</p>
+          <div class="actions"><a class="btn primary" href="#/ajustes">Ir a Ajustes</a></div></div>`}
       </section>
 
       <section id="tab-notas" ${tab === "notas" ? "" : "hidden"}>
@@ -406,11 +450,24 @@ async function viewNew(params) {
 
   $$("[data-tab]").forEach(b => b.addEventListener("click", () => {
     $$("[data-tab]").forEach(x => x.setAttribute("aria-selected", x === b));
-    ["buscar", "web", "notas"].forEach(k => ($(`#tab-${k}`).hidden = b.dataset.tab !== k));
-    $("#create-bar").hidden = b.dataset.tab === "notas" || selected.size === 0;
+    ["buscar", "web", "ia", "notas"].forEach(k => ($(`#tab-${k}`).hidden = b.dataset.tab !== k));
+    $("#create-bar").hidden = ["notas", "ia"].includes(b.dataset.tab) || selected.size === 0;
+  }));
+  $$("[data-cat]").forEach(b => b.addEventListener("click", () => {
+    category = b.dataset.cat;
+    try { localStorage.setItem("categoria", category); } catch (e) { /* nada */ }
+    $$("[data-cat]").forEach(x => x.setAttribute("aria-pressed", x === b));
+    active.clear();
+    catSites(category).filter(x => avail.has(x)).forEach(x => active.add(x));
+    $$(".src-chip input").forEach(cb => (cb.checked = active.has(cb.value)));
+    $("#src-count").textContent = active.size;
+    saveActive();
+    if ($("#search [name=q]").value.trim().length > 1) doSearch();
   }));
   $$(".src-chip input").forEach(cb => cb.addEventListener("change", () => {
     cb.checked ? active.add(cb.value) : active.delete(cb.value);
+    $("#src-count").textContent = active.size;
+    saveActive();
     if ($("#search [name=q]").value.trim().length > 1) doSearch();
   }));
 
@@ -446,9 +503,10 @@ async function viewNew(params) {
     if (!active.size) { box.innerHTML = `<p class="muted">Elegí al menos una fuente donde buscar.</p>`; return; }
     box.innerHTML = `<p class="muted"><span class="loader"></span> Buscando “${esc(q)}”…</p>`;
     try {
-      const res = await api(`/api/search?q=${encodeURIComponent(q)}&sites=${[...active].join(",")}`);
+      const res = await api(`/api/search?q=${encodeURIComponent(q)}&sites=${[...active].join(",")}&category=${encodeURIComponent(category || "")}`);
       const groups = res.groups.filter(g => g.results.length);
-      if (!groups.length) {
+      const webg = res.groups.find(g => g.site === "web");
+      if (!groups.length && !(webg && webg.error)) {
         box.innerHTML = `<div class="empty"><h3>Sin resultados</h3><p class="muted">Probá con otras palabras, con el nombre más general del tema o sumá más fuentes.</p></div>`;
         return;
       }
@@ -457,20 +515,36 @@ async function viewNew(params) {
         groups.map(g => `
           <div class="src-group">
             <div class="row" style="margin-bottom:8px"><h3>${esc(g.name)}</h3><span class="small muted">${esc(g.about)}</span></div>
+            ${g.summary ? `<p class="small muted" style="margin-bottom:8px">${esc(g.summary)}</p>` : ""}
             <div class="stack" style="--gap:8px">${g.results.map(r => {
               const i = all.push(r) - 1;
               const key = `${r.site}|${r.title}`;
               return `<label class="result-item ${selected.has(key) ? "sel" : ""}">
                 <input type="checkbox" data-i="${i}" data-key="${esc(key)}" ${selected.has(key) ? "checked" : ""}>
-                <div><h3>${esc(r.title)}</h3><p>${esc(r.snippet)}…</p>
-                <p class="small muted">${r.words.toLocaleString("es-AR")} palabras, <a href="${esc(r.url)}" target="_blank" rel="noopener">ver página</a></p></div>
+                <div><h3>${esc(r.title)}</h3>${r.snippet ? `<p>${esc(r.snippet)}…</p>` : ""}
+                <p class="small muted">${r.meta ? `${esc(r.meta)}, ` : ""}${r.words ? `${r.words.toLocaleString("es-AR")} palabras, ` : ""}<a href="${esc(r.url)}" target="_blank" rel="noopener">ver página</a></p></div>
               </label>`;
             }).join("")}</div>
+            ${g.suggestions_html ? `<iframe class="g-suggest" sandbox="allow-popups allow-popups-to-escape-sandbox" title="Sugerencias de búsqueda de Google"></iframe>` : ""}
           </div>`).join("") +
+        (webg && webg.error ? `<p class="callout small">Google: ${esc(webg.error)}</p>` : "") +
+        (() => {
+          const empty = res.groups.filter(g => !g.results.length && !g.error).map(g => g.name);
+          return empty.length ? `<p class="small muted">También se buscó en ${esc(empty.join(", "))}, sin resultados para esta búsqueda. Probá con un término más general (por ejemplo, el nombre de la materia).</p>` : "";
+        })() +
         res.errors.map(e => `<p class="small muted">No se pudo consultar ${esc(e.name)}.</p>`).join("");
+      // Google exige mostrar sus sugerencias de búsqueda: se aíslan en un iframe
+      $$("#results .g-suggest").forEach((fr, k) => {
+        const g = groups.filter(x => x.suggestions_html)[k];
+        if (g) fr.srcdoc = `<base target="_blank">${g.suggestions_html}`;
+      });
       $$("#results input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
         const r = all[+cb.dataset.i];
-        const ok = select(cb.dataset.key, { site: r.site, title: r.title, label: r.title, source: r.source_name }, cb.checked);
+        const entry = r.site === "web" ? { url: r.url, label: r.title, source: "Google" }
+          : r.ref || ["tavily", "brave", "claude_web"].includes(r.site)
+            ? { site: r.site, ref: r.ref, url: r.url, title: r.title, label: r.title, source: r.source_name, provider: true }
+            : { site: r.site, title: r.title, label: r.title, source: r.source_name };
+        const ok = select(cb.dataset.key, entry, cb.checked);
         if (!ok) cb.checked = false;
         cb.closest(".result-item").classList.toggle("sel", cb.checked);
       }));
@@ -509,8 +583,16 @@ async function viewNew(params) {
   }
   $("#create").addEventListener("click", e => {
     const title = $("#topic-title")?.value.trim();
-    const srcs = [...selected.values()].map(s => (s.url ? { url: s.url } : { site: s.site, title: s.title }));
+    const srcs = [...selected.values()].map(s => (s.provider ? { site: s.site, ref: s.ref, url: s.url, title: s.title }
+      : s.url ? { url: s.url } : { site: s.site, title: s.title }));
     create({ title: title || null, sources: srcs }, $("#create-msg"), e.currentTarget);
+  });
+  $("#ia-form")?.addEventListener("submit", e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    create({ title: null, ai_material: { query: fd.get("query").trim(), level: fd.get("level"), focus: fd.get("focus") || "" } },
+      $("#ia-msg"), e.submitter);
+    $("#ia-msg").innerHTML = `<span class="loader"></span> Buscando fuentes y escribiendo el apunte. Puede tardar hasta un minuto…`;
   });
   $("#notes-form").addEventListener("submit", e => {
     e.preventDefault();
@@ -532,8 +614,14 @@ async function viewTopic(id, params) {
   main.innerHTML = `
     <div class="page" style="--hue:${t.hue}">
       <div class="page-head">
-        <div class="row small muted"><span class="dot"></span>${esc(t.sources.map(x => x.name).filter((v, i, a) => a.indexOf(v) === i).join(" y "))}${t.ai_status === "generando" ? `<span><span class="loader" style="width:13px;height:13px"></span> Sumando preguntas con IA</span>` : ""}</div>
+        <div class="row small muted"><span class="dot"></span>${esc(t.sources.map(x => x.name).filter((v, i, a) => a.indexOf(v) === i).join(" y "))}${(t.ai_status || "").startsWith("generando") ? `<span><span class="loader" style="width:13px;height:13px"></span> Escribiendo preguntas con IA${t.ai_status.includes("/") ? ` (bloque ${esc(t.ai_status.split(" ")[1])})` : ""}</span>` : t.ai_items ? `<span class="chip">${plural(t.ai_items, "pregunta escrita con IA", "preguntas escritas con IA")}</span>` : ""}</div>
         <h1 style="margin-top:6px">${esc(t.title)}</h1>
+        ${STATUS.ai_enabled && t.ai_items < 8 && !(t.ai_status || "").startsWith("generando") ? `
+          <div class="callout info small row" style="margin-top:10px">
+            <span class="grow">${t.ai_items ? `Este tema tiene solo ${plural(t.ai_items, "pregunta escrita", "preguntas escritas")} con IA; el resto se armó automáticamente a partir del texto.` : "Las preguntas de este tema se armaron automáticamente a partir del texto."} Con la IA tenés preguntas redactadas como en un examen, por niveles y con explicación.</span>
+            <button class="btn primary" id="go-ai-q">${t.ai_items ? "Generar más con IA" : "Generar preguntas con IA"}</button>
+          </div>` : ""}
+        ${t.ai_generated ? `<p class="callout small" style="margin-top:10px">Este tema incluye un <b>apunte generado con IA</b> a partir de fuentes abiertas. Las fuentes originales están en la pestaña Fuentes: si algún dato no te cierra, verificalo ahí.</p>` : ""}
         <div class="progress" style="max-width:420px"><i style="width:${Math.round((s.progress || 0) * 100)}%"></i></div>
         <div class="meta-row">
           <span>${pct(s.progress)} dominado</span>
@@ -546,22 +634,26 @@ async function viewTopic(id, params) {
           <button class="btn primary big" id="go-practice">Practicar ahora</button>
           ${s.due ? `<button class="btn big" id="go-review">Repasar lo de hoy (${s.due})</button>` : ""}
           ${s.errors ? `<button class="btn big" id="go-errors">Practicar errores (${s.errors})</button>` : ""}
-          <button class="btn ghost big" id="go-export" aria-expanded="false">Exportar PDF</button>
+          <button class="btn ghost big" id="go-export" aria-expanded="false">Guardar PDF</button>
         </div>
         ${levelPicker()}
         <div class="panel export-panel" id="export-panel" hidden>
-          <h3>Exportar preguntas y respuestas</h3>
+          <h3>Guardar como PDF</h3>
           <div class="row" style="margin-top:12px;align-items:flex-end">
-            <label class="field"><span>Nivel</span><select class="input" id="ex-level">
+            <label class="field"><span>Contenido</span><select class="input" id="ex-content">
+              <option value="apunte">Apunte: el material generado</option>
+              <option value="ambos">Apunte + preguntas y respuestas</option>
+              <option value="preguntas">Solo preguntas y respuestas</option></select></label>
+            <label class="field ex-q"><span>Nivel</span><select class="input" id="ex-level">
               ${Object.entries(LEVELS).map(([k, v]) => `<option value="${k}" ${k === getLevel() ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
-            <label class="field"><span>Formato</span><select class="input" id="ex-layout">
+            <label class="field ex-q ex-only-q"><span>Formato</span><select class="input" id="ex-layout">
               <option value="examen">Examen: respuestas al final</option>
               <option value="estudio">Guía de estudio: respuesta debajo de cada pregunta</option></select></label>
-            <label class="field"><span>Preguntas por sección</span><select class="input" id="ex-max">
+            <label class="field ex-q"><span>Preguntas por sección</span><select class="input" id="ex-max">
               ${[5, 8, 12, 20, 40].map(n => `<option ${n === 12 ? "selected" : ""}>${n}</option>`).join("")}</select></label>
             <a class="btn primary" id="ex-go" download>Descargar PDF</a>
           </div>
-          <p class="small muted" style="margin-top:10px">El formato examen sirve para practicar en papel: respondé sin mirar y corregí con la clave del final.</p>
+          <p class="small muted" id="ex-help" style="margin-top:10px"></p>
         </div>
       </div>
       <div class="tabs" role="tablist">
@@ -571,14 +663,42 @@ async function viewTopic(id, params) {
       <div id="tab-body"></div>
     </div>`;
   bindLevelPicker();
-  const exUrl = () => `/api/topics/${t.id}/export.pdf?level=${$("#ex-level").value}&layout=${$("#ex-layout").value}&max_per_section=${$("#ex-max").value}`;
+  $("#go-ai-q")?.addEventListener("click", async e => {
+    e.currentTarget.disabled = true;
+    try {
+      await api(`/api/topics/${t.id}/ai-questions`, { method: "POST" });
+      toast("La IA está escribiendo las preguntas. Podés seguir usando la app.");
+      viewTopic(String(t.id), params);
+    } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+  });
+  // mientras la IA escribe preguntas, se actualiza el encabezado sola
+  if ((t.ai_status || "").startsWith("generando")) {
+    const here = location.hash;
+    const timer = setTimeout(() => { if (location.hash === here) viewTopic(String(t.id), params); }, 6000);
+    const prev = cleanup;
+    cleanup = () => { clearTimeout(timer); if (prev) prev(); };
+  }
+  const EX_HELP = {
+    apunte: "Incluye el texto de cada sección, lo que resaltaste (en amarillo), tus resúmenes y un glosario con los conceptos que abriste con «¿por qué?».",
+    ambos: "El apunte completo y, al final, preguntas con su respuesta y la evidencia en la fuente.",
+    preguntas: "El formato examen sirve para practicar en papel: respondé sin mirar y corregí con la clave del final.",
+  };
+  try { const c = localStorage.getItem("export_contenido"); if (c && EX_HELP[c]) $("#ex-content").value = c; } catch { /* sin almacenamiento */ }
+  const exUrl = () => {
+    const c = $("#ex-content").value;
+    $$(".ex-q").forEach(el => (el.hidden = c === "apunte"));
+    $$(".ex-only-q").forEach(el => (el.hidden = c !== "preguntas"));
+    $("#ex-help").textContent = EX_HELP[c];
+    try { localStorage.setItem("export_contenido", c); } catch { /* sin almacenamiento */ }
+    return `/api/topics/${t.id}/export.pdf?content=${c}&level=${$("#ex-level").value}&layout=${$("#ex-layout").value}&max_per_section=${$("#ex-max").value}`;
+  };
   $("#go-export").addEventListener("click", e => {
     const p = $("#export-panel");
     p.hidden = !p.hidden;
     e.currentTarget.setAttribute("aria-expanded", String(!p.hidden));
     $("#ex-go").href = exUrl();
   });
-  ["#ex-level", "#ex-layout", "#ex-max"].forEach(sel => $(sel).addEventListener("change", () => ($("#ex-go").href = exUrl())));
+  ["#ex-content", "#ex-level", "#ex-layout", "#ex-max"].forEach(sel => $(sel).addEventListener("change", () => ($("#ex-go").href = exUrl())));
   $("#go-practice").addEventListener("click", () => startSession({ mode: "practice", topic_ids: [t.id], n: 12, tech: "practica", back: `#/tema/${t.id}` }));
   $("#go-review")?.addEventListener("click", () => startSession({ mode: "review", topic_ids: [t.id], n: 30, tech: "distribuida", back: `#/tema/${t.id}` }));
   $("#go-errors")?.addEventListener("click", () => startSession({ mode: "errors", topic_ids: [t.id], n: 12, tech: "errores", back: `#/tema/${t.id}` }));
@@ -604,15 +724,19 @@ async function viewTopic(id, params) {
           </div>
         </div>`).join("");
     } else if (which === "leer") {
-      body.innerHTML = `<div class="reader">${t.sections.map(sec => `
+      let terms = [];
+      try { terms = (await api(`/api/topics/${t.id}/concepts`)).terms; } catch (e) { /* sin conceptos */ }
+      body.innerHTML = `<p class="small muted" style="margin-bottom:10px">Los conceptos subrayados se pueden tocar: te muestran qué dice la fuente y por qué.</p>
+      <div class="reader">${t.sections.map(sec => `
         <h3 id="sec-${sec.id}">${esc(sec.title)}</h3>
         <div class="sec-meta"><span>${sec.words} palabras</span><span>${plural(sec.stats.items, "pregunta", "preguntas")}</span>${sec.stats.accuracy != null ? `<span>Aciertos: ${pct(sec.stats.accuracy)}</span>` : ""}
           <button class="btn ghost small" data-practice="${sec.id}" style="padding:2px 8px">Practicar esta sección</button></div>
-        ${sec.paragraphs.map(p => `<p>${p.map(x => esc(x.text)).join(" ")}</p>`).join("")}`).join("")}
+        ${sec.paragraphs.map(p => { const used = new Set(); return `<p>${p.map(x => linkConcepts(x.text, terms, used)).join(" ")}</p>`; }).join("")}`).join("")}
       </div>
       <p class="callout small" style="margin-top:14px">Leer y releer da sensación de dominio, pero lo que fija la información es recuperarla. Después de leer una sección, practicala.</p>`;
       $$("[data-practice]").forEach(b => b.addEventListener("click", () =>
         startSession({ mode: "section", section_id: +b.dataset.practice, n: 10, tech: "practica", back: `#/tema/${t.id}?tab=leer` })));
+      bindConceptButtons(body, t.id);
     } else if (which === "errores") {
       const errs = await api(`/api/topics/${t.id}/errors`);
       body.innerHTML = errs.length ? `
@@ -632,10 +756,28 @@ async function viewTopic(id, params) {
         <ul class="list">${t.sources.map(src => `
           <li><div class="grow"><b>${esc(src.title)}</b>
             <div class="small muted">${esc(src.name)}${src.license ? `, licencia ${esc(src.license)}` : ""}${src.revised_at ? `, versión del ${new Date(src.revised_at).toLocaleDateString("es-AR")}` : ""}, descargado el ${new Date(src.retrieved_at).toLocaleDateString("es-AR")}</div></div>
-            ${src.url ? `<a class="btn" href="${esc(src.revid ? src.url.split("/wiki/")[0] + "/w/index.php?oldid=" + src.revid : src.url)}" target="_blank" rel="noopener">Ver versión usada</a>` : ""}
+            ${src.url ? `<a class="btn" href="${esc(src.revid ? src.url.split("/wiki/")[0] + "/w/index.php?oldid=" + src.revid : src.url)}" target="_blank" rel="noopener">${src.revid ? "Ver versión usada" : "Abrir página"}</a>` : ""}
           </li>`).join("")}</ul>
-        <p class="small muted" style="margin-top:12px">Se guarda la revisión exacta del artículo: cada corrección se hace contra ese texto, aunque Wikipedia cambie después.</p>
-        <div class="actions"><a class="btn" href="#/nuevo?agregar=${t.id}">Agregar otra fuente</a><span class="spacer"></span><button class="btn danger" id="del">Eliminar tema</button></div>`;
+        <p class="small muted" style="margin-top:12px">Se guarda una copia del texto de cada fuente${t.sources.some(x => x.revid) ? " (y en los wikis, la revisión exacta)" : ""}: cada corrección se hace contra ese texto, aunque la página cambie después.</p>
+        <div class="actions"><a class="btn" href="#/nuevo?agregar=${t.id}">Agregar otra fuente</a>
+          ${STATUS.ai_enabled ? `<button class="btn" id="ai-q2" title="La IA escribe preguntas nuevas para todo el tema; tu progreso se conserva">Generar preguntas con IA</button>` : ""}
+          <button class="btn" id="enrich" title="Suma preguntas conceptuales automáticas sin borrar tu progreso">Preguntas automáticas nuevas</button>
+          <span class="spacer"></span><button class="btn danger" id="del">Eliminar tema</button></div>`;
+      $("#ai-q2")?.addEventListener("click", async e => {
+        e.currentTarget.disabled = true;
+        try {
+          await api(`/api/topics/${t.id}/ai-questions`, { method: "POST" });
+          toast("La IA está escribiendo las preguntas. Podés seguir usando la app.");
+          viewTopic(String(t.id), new URLSearchParams("tab=fuentes"));
+        } catch (err) { toast(err.message, true); e.currentTarget.disabled = false; }
+      });
+      $("#enrich").addEventListener("click", async e => {
+        e.currentTarget.disabled = true;
+        e.currentTarget.innerHTML = `<span class="loader" style="width:14px;height:14px"></span> Generando…`;
+        const r = await api(`/api/topics/${t.id}/enrich`, { method: "POST" });
+        toast(`Se sumaron ${plural(r.added, "pregunta conceptual", "preguntas conceptuales")}${r.ai ? "; la IA sigue agregando más en segundo plano" : ""}`);
+        viewTopic(String(t.id), new URLSearchParams("tab=fuentes"));
+      });
       $("#del").addEventListener("click", async () => {
         if (!confirm(`¿Eliminar “${t.title}” con todo su progreso? No se puede deshacer.`)) return;
         await api(`/api/topics/${t.id}`, { method: "DELETE" });
@@ -728,6 +870,7 @@ async function viewSession(params) {
           <span class="spacer"></span>
           <span class="kind">${isRetry ? "Segundo intento" : KIND[it.kind]}</span>
           <span class="lvl lvl-${it.level}">${LEVEL_NUM[it.level] || ""}</span>
+          ${it.origin === "ia" ? `<span class="chip" title="Pregunta generada con IA y verificada contra una cita de la fuente">IA</span>` : ""}
         </div>
         <div class="q-text">${prompt}</div>
         ${input}
@@ -807,6 +950,7 @@ async function viewSession(params) {
           <q>${highlightIn(res.context, it.kind === "tf" ? "" : res.correct_answer)}</q>
           ${link ? `<div style="margin-top:6px"><a href="${esc(link)}" target="_blank" rel="noopener">Abrir en ${esc(src.name)}</a></div>` : ""}
         </div>` : ""}
+        <div class="why-wrap"><button type="button" class="btn ghost" data-explain>¿Por qué es así?</button><div class="why-box" hidden></div></div>
         ${res.self_check ? `<div class="selfcheck"><span>¿Cómo te fue en realidad?</span>
           <button class="btn" data-ov="correct">Lo sabía</button><button class="btn" data-ov="partial">A medias</button><button class="btn" data-ov="incorrect">No lo sabía</button></div>` : ""}
         ${requeued ? `<p class="retry-note">Esta pregunta vuelve en unos minutos dentro de esta sesión.</p>` : ""}
@@ -830,6 +974,7 @@ async function viewSession(params) {
         toast("Autoevaluación registrada");
       } catch (e) { toast(e.message, true); }
     }));
+    bindExplainButton($("#fb"), it, res.explanation);
     $("#next").addEventListener("click", next);
     $("#next").focus({ preventScroll: true });
     $("#fb").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
@@ -1221,6 +1366,29 @@ function viewGuide() {
 // ------------------------------------------------------------------------- //
 // Ajustes
 // ------------------------------------------------------------------------- //
+function passwordPanel() {
+  if (!ME || !ME.user) return "";
+  return `<div class="panel" style="margin-top:16px">
+    <h3>Tu cuenta: ${esc(ME.user.username)}</h3>
+    <form id="pw-form" class="stack" style="--gap:10px;margin-top:10px">
+      <label class="field"><span>Contraseña actual</span><input class="input" type="password" name="current" required autocomplete="current-password"></label>
+      <label class="field"><span>Contraseña nueva</span><input class="input" type="password" name="new" required minlength="8" autocomplete="new-password"></label>
+      <div class="actions"><button class="btn">Cambiar contraseña</button><button type="button" class="btn ghost" id="logout2">Cerrar sesión</button></div>
+    </form></div>`;
+}
+function bindPasswordPanel() {
+  $("#logout2")?.addEventListener("click", logout);
+  $("#pw-form")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api("/api/auth/password", { method: "POST", body: { current: fd.get("current"), new: fd.get("new") } });
+      toast("Contraseña cambiada. Se cerraron tus otras sesiones.");
+      e.target.reset();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
 async function viewSettings() {
   setTitle("Ajustes");
   const st = await api("/api/status");
@@ -1236,57 +1404,202 @@ async function viewSettings() {
         </div>
         <div class="panel" style="margin-top:16px">
           <h3>Tus datos</h3>
-          <p class="small muted" style="margin-top:6px">Cada navegador tiene su propio espacio: nadie más ve tus temas ni tus respuestas. El servidor gratuito borra los datos cuando se reinicia, así que no los uses como único lugar para guardar tu progreso. Si querés conservarlos, instalá la app en tu computadora con Docker (instrucciones en el repositorio).</p>
+          <p class="small muted" style="margin-top:6px">Cada cuenta tiene su propio espacio: nadie más ve tus temas ni tus respuestas. El servidor gratuito borra los datos cuando se reinicia, así que no los uses como único lugar para guardar tu progreso. Si querés conservarlos, instalá la app en tu computadora con Docker (instrucciones en el repositorio).</p>
         </div>
+        ${passwordPanel()}
       </div>`;
+    bindPasswordPanel();
     return;
   }
-  main.innerHTML = `
+  let prov = st.provider || "anthropic";
+  const INFO = {
+    anthropic: {
+      keyLabel: "Clave de la API de Anthropic", keyPh: "sk-ant-…",
+      where: `Se crea en <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>, sección API Keys. La API se paga aparte de la suscripción de claude.ai.`,
+      models: ["claude-haiku-5-5", "claude-sonnet-5-5"],
+    },
+    gemini: {
+      keyLabel: "Clave de la API de Gemini", keyPh: "AIza…",
+      where: `Se crea en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>, en «Get API key». La suscripción a Google AI Pro no incluye la API: la clave tiene que estar en un proyecto con facturación activada.`,
+      models: ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"],
+    },
+  };
+  const draw = () => {
+    const p = st.providers[prov];
+    const inf = INFO[prov];
+    main.innerHTML = `
     <div class="page narrow">
       <div class="page-head">
         <h1>Ajustes</h1>
-        <p class="lead">La app funciona completa sin configurar nada. Opcionalmente podés conectar la API de Claude para corregir respuestas abiertas por significado y sumar preguntas de comprensión.</p>
+        <p class="lead">La app funciona completa sin configurar nada. Opcionalmente podés conectar una IA, Claude o Gemini, para corregir respuestas abiertas por significado y sumar preguntas de comprensión.</p>
       </div>
       <div class="panel stack">
         <div class="row"><h3>Corrección con IA</h3><span class="spacer"></span>
-          <span class="chip ${st.ai_enabled ? "ok" : ""}">${st.ai_enabled ? `Activa con ${esc(st.model)}` : "Desactivada"}</span></div>
+          <span class="chip ${st.ai_enabled ? "ok" : ""}">${st.ai_enabled ? `Activa: ${esc(st.label)}` : "Desactivada"}</span></div>
         <p class="small muted">Las preguntas generadas con IA deben citar un fragmento literal de la fuente; si la cita no aparece en el artículo descargado, se descartan. La corrección siempre se hace contra el texto de la fuente.</p>
+        <div class="field"><span>Proveedor</span>
+          <div class="seg" role="group" aria-label="Proveedor de IA">${Object.entries(st.providers).map(([k, v]) =>
+            `<button type="button" data-prov="${k}" aria-pressed="${k === prov}">${esc(v.name)}${v.has_key ? " ✓" : ""}</button>`).join("")}</div></div>
         <form id="ai" class="stack">
-          <label class="field"><span>Clave de la API de Anthropic</span>
-            <input class="input" type="password" name="key" autocomplete="off" placeholder="${st.ai_enabled ? "Hay una clave guardada" + (st.key_from === "entorno" ? " en el archivo .env" : "") : "sk-ant-…"}"></label>
+          <label class="field"><span>${inf.keyLabel}</span>
+            <input class="input" type="password" name="key" autocomplete="off" placeholder="${p.has_key ? "Hay una clave guardada" + (p.key_from === "entorno" ? " en el archivo .env" : "") : inf.keyPh}"></label>
+          <p class="small muted">${inf.where}</p>
           <label class="field"><span>Modelo</span>
-            <input class="input" name="model" placeholder="claude-sonnet-5-5"></label>
+            <input class="input" name="model" list="models" value="${esc(p.model)}" placeholder="${esc(p.default_model)}">
+            <datalist id="models">${inf.models.map(m => `<option value="${m}">`).join("")}</datalist></label>
+          <p class="small muted">Los modelos «lite» o «haiku» son los más baratos y alcanzan para corregir. Para que la IA escriba preguntas de mejor calidad, conviene uno más capaz: <b>gemini-3.6-flash</b> o <b>claude-sonnet-5-5</b>.</p>
           <div class="actions">
-            <button class="btn primary">Guardar</button>
-            <button type="button" class="btn" id="test" ${st.ai_enabled ? "" : "disabled"}>Probar conexión</button>
-            ${st.key_from === "ajustes" ? `<button type="button" class="btn danger" id="clear">Quitar clave</button>` : ""}
+            <button class="btn primary">Guardar y usar ${esc(p.name)}</button>
+            <button type="button" class="btn" id="test" ${p.has_key && st.provider === prov ? "" : "disabled"}>Probar conexión</button>
+            ${p.key_from === "ajustes" ? `<button type="button" class="btn danger" id="clear">Quitar clave</button>` : ""}
             <span class="small muted" id="ai-msg"></span>
           </div>
         </form>
       </div>
       <div class="panel" style="margin-top:16px">
+        <h3>Buscadores con clave</h3>
+        <p class="small muted" style="margin-top:6px">Opcionales. Wikipedia, Wikilibros, Wikiversidad, arXiv, Europe PMC y Stack Overflow funcionan sin clave. Google usa tu clave de Gemini y «Web (vía Claude)», la de Claude.</p>
+        <form id="sk" class="stack" style="--gap:12px;margin-top:12px">
+          ${[["tavily", "Tavily", "tvly-…", `Buscador web para IA, 1.000 búsquedas gratis por mes sin tarjeta. Clave en <a href="https://app.tavily.com" target="_blank" rel="noopener">app.tavily.com</a>.`],
+             ["brave", "Brave Search", "Clave de la API", `Buscador independiente. Clave en <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> (revisá allí sus planes vigentes).`],
+             ["openalex", "OpenAlex (opcional)", "Clave gratuita", `Sin clave funciona con un límite diario bajo; con la clave gratuita de <a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org</a> el límite es 10 veces mayor.`]]
+            .map(([k, label, ph, help]) => `
+            <label class="field"><span>${label} ${st.searchers?.[k]?.has_key ? `<span class="chip ok">configurada</span>` : ""}</span>
+              <input class="input" type="password" name="${k}" autocomplete="off" placeholder="${st.searchers?.[k]?.has_key ? "Hay una clave guardada" + (st.searchers[k].key_from === "entorno" ? " en el archivo .env" : "") : esc(ph)}"></label>
+            <p class="small muted" style="margin-top:-6px">${help}${st.searchers?.[k]?.key_from === "ajustes" ? ` <button type="button" class="btn ghost small" data-clear-sk="${k}" style="padding:2px 8px">Quitar clave</button>` : ""}</p>`).join("")}
+          <div class="actions"><button class="btn primary">Guardar claves</button></div>
+        </form>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3>Qué preguntas mostrar</h3>
+        <label class="check" style="margin-top:10px"><input type="checkbox" id="only-ai" ${st.only_ai_questions ? "checked" : ""}>
+          Cuando un tema tiene preguntas escritas por IA, ocultar las automáticas</label>
+        <p class="small muted" style="margin-top:6px">Las preguntas automáticas se arman cortando oraciones del texto y a veces quedan pobres. Ocultarlas no borra tu progreso: si desmarcás la opción, vuelven.</p>
+      </div>
+      <div class="panel" style="margin-top:16px">
         <h3>Tus datos</h3>
-        <p class="small muted" style="margin-top:6px">Todo se guarda en la carpeta <b>data</b> junto al proyecto (archivo estudio.db). Para hacer una copia de seguridad, copiá esa carpeta. Si borrás el contenedor de Docker, tus temas y tu progreso siguen ahí.</p>
+        <p class="small muted" style="margin-top:6px">${ME && ME.user ? "Cada cuenta tiene su propia base de datos dentro de la carpeta <b>data/usuarios</b>. " : ""}Todo se guarda en la carpeta <b>data</b> junto al proyecto (archivo estudio.db), incluidas las claves que cargues acá: no compartas esa carpeta. Para hacer una copia de seguridad, copiala. Si borrás el contenedor de Docker, tus temas y tu progreso siguen ahí.</p>
       </div>
     </div>`;
-  $("#ai").addEventListener("submit", async e => {
+    $$("[data-prov]").forEach(b => b.addEventListener("click", () => { prov = b.dataset.prov; draw(); }));
+    $("#sk")?.addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const keys = {};
+      for (const k of ["tavily", "brave", "openalex"]) { const v = (fd.get(k) || "").trim(); if (v) keys[k] = v; }
+      if (!Object.keys(keys).length) { toast("No escribiste ninguna clave nueva"); return; }
+      await api("/api/settings", { method: "POST", body: { search_keys: keys } });
+      toast("Claves guardadas");
+      viewSettings();
+    });
+    $$("[data-clear-sk]").forEach(b => b.addEventListener("click", async () => {
+      await api("/api/settings", { method: "POST", body: { search_keys: { [b.dataset.clearSk]: "" } } });
+      toast("Clave eliminada");
+      viewSettings();
+    }));
+    $("#only-ai")?.addEventListener("change", async e => {
+      await api("/api/settings", { method: "POST", body: { only_ai_questions: e.target.checked } });
+      toast(e.target.checked ? "Se muestran solo las preguntas de IA en los temas que las tienen" : "Se muestran todas las preguntas");
+    });
+    $("#ai").addEventListener("submit", async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await api("/api/settings", { method: "POST", body: { provider: prov, key: fd.get("key") || null, model: fd.get("model") || "" } });
+        toast("Ajustes guardados");
+        STATUS = null;
+        viewSettings();
+      } catch (err) { toast(err.message, true); }
+    });
+    $("#test")?.addEventListener("click", async () => {
+      $("#ai-msg").innerHTML = `<span class="loader"></span>`;
+      const r = await api("/api/settings/test-ai", { method: "POST" });
+      $("#ai-msg").textContent = r.message;
+    });
+    $("#clear")?.addEventListener("click", async () => {
+      await api("/api/settings", { method: "POST", body: { provider: prov, clear_key: true } });
+      toast("Clave eliminada");
+      viewSettings();
+    });
+    main.querySelector(".page").insertAdjacentHTML("beforeend", passwordPanel());
+    bindPasswordPanel();
+  };
+  draw();
+}
+
+// ------------------------------------------------------------------------- //
+// Login
+// ------------------------------------------------------------------------- //
+let ME = null;
+
+function viewLogin(mode) {
+  document.body.classList.add("no-rail");
+  const register = mode === "register" || (ME && ME.first_user);
+  setTitle(register ? "Crear cuenta" : "Iniciar sesión");
+  main.innerHTML = `
+    <div class="login">
+      <div class="login-brand"><span class="brand-word">Estudio</span><span class="brand-mark">Dunlosky</span></div>
+      <h1>${register ? "Creá tu cuenta" : "Iniciá sesión"}</h1>
+      <p class="lead">${register
+        ? (ME && ME.first_user ? "Es la primera cuenta de esta app: si ya tenías temas guardados, quedan en esta cuenta." : "Tus temas, tu progreso y tus claves quedan separados de los de otras personas.")
+        : "Entrá para ver tus temas y seguir estudiando."}</p>
+      <form id="login-form" class="stack" autocomplete="on">
+        <label class="field"><span>Usuario</span>
+          <input class="input" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\-]{3,32}"
+            autocomplete="username" autocapitalize="none" spellcheck="false" title="Letras sin tilde, números, punto, guion o guion bajo"></label>
+        <label class="field"><span>Contraseña</span>
+          <input class="input" type="password" name="password" required minlength="8" maxlength="256"
+            autocomplete="${register ? "new-password" : "current-password"}"></label>
+        ${register ? `<label class="field"><span>Repetí la contraseña</span>
+          <input class="input" type="password" name="password2" required minlength="8" maxlength="256" autocomplete="new-password"></label>
+          <p class="small muted">Mínimo 8 caracteres. Usá una contraseña que no uses en otros sitios.</p>` : ""}
+        <p class="login-error" id="login-error" role="alert" hidden></p>
+        <button class="btn primary big">${register ? "Crear cuenta" : "Entrar"}</button>
+      </form>
+      ${ME && ME.first_user ? "" : register
+        ? `<p class="small" style="margin-top:16px">¿Ya tenés cuenta? <a href="#" id="to-login">Iniciá sesión</a></p>`
+        : (ME && ME.can_register ? `<p class="small" style="margin-top:16px">¿No tenés cuenta? <a href="#" id="to-register">Creá una</a></p>` : "")}
+    </div>`;
+  $("#to-login")?.addEventListener("click", e => { e.preventDefault(); viewLogin("login"); });
+  $("#to-register")?.addEventListener("click", e => { e.preventDefault(); viewLogin("register"); });
+  $("[name=username]").focus();
+  $("#login-form").addEventListener("submit", async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    await api("/api/settings", { method: "POST", body: { anthropic_key: fd.get("key") || null, claude_model: fd.get("model") || null } });
-    toast("Ajustes guardados");
-    viewSettings();
-  });
-  $("#test")?.addEventListener("click", async () => {
-    $("#ai-msg").innerHTML = `<span class="loader"></span>`;
-    const r = await api("/api/settings/test-ai", { method: "POST" });
-    $("#ai-msg").textContent = r.message;
-  });
-  $("#clear")?.addEventListener("click", async () => {
-    await api("/api/settings", { method: "POST", body: { clear_key: true } });
-    toast("Clave eliminada");
-    viewSettings();
+    const err = $("#login-error");
+    err.hidden = true;
+    if (register && fd.get("password") !== fd.get("password2")) {
+      err.textContent = "Las contraseñas no coinciden."; err.hidden = false; return;
+    }
+    e.submitter.disabled = true;
+    try {
+      await api(register ? "/api/auth/register" : "/api/auth/login", { method: "POST",
+        body: { username: fd.get("username").trim(), password: fd.get("password") } });
+      location.hash = "#/";
+      location.reload();
+    } catch (ex) {
+      err.textContent = ex.message; err.hidden = false;
+      e.submitter.disabled = false;
+    }
   });
 }
 
-pomoInit();
-route();
+async function logout() {
+  try { await api("/api/auth/logout", { method: "POST" }); } catch (e) { /* igual se sale */ }
+  try { localStorage.removeItem("pomo_state"); } catch (e) { /* nada */ }
+  location.hash = "#/";
+  location.reload();
+}
+
+(async function start() {
+  try { ME = await api("/api/auth/me"); } catch (e) { ME = { auth_enabled: false }; }
+  if (ME.auth_enabled && !ME.user) { viewLogin(); return; }
+  if (ME.user) {
+    const box = document.getElementById("user-box");
+    box.hidden = false;
+    box.querySelector("b").textContent = ME.user.username;
+    box.querySelector("button").addEventListener("click", logout);
+  }
+  pomoInit();
+  route();
+})();

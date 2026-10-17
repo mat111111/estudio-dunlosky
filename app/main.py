@@ -4,6 +4,7 @@ Ejecutar: uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
@@ -17,12 +18,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 
-from . import ai, db, generator, grader, sources, srs
+from . import ai, auth, db, generator, grader, search_providers, sources, srs
 from . import textproc as tp
 
 APP_DIR = Path(__file__).parent
@@ -41,9 +42,17 @@ VISITOR_COOKIE = "ed_visitante"
 VISITORS_DIR = os.path.join(os.path.dirname(db.DB_PATH) or ".", "visitantes")
 
 
+# Login: activado por defecto. Con AUTH=0 la app funciona sin cuentas (un solo usuario local).
+AUTH_ENABLED = os.environ.get("AUTH", "1").strip().lower() not in ("0", "false", "no")
+ALLOW_SIGNUP = os.environ.get("ALLOW_SIGNUP", "1").strip().lower() not in ("0", "false", "no")
+AUTH_FREE = ("/api/health", "/api/auth/")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    if not PUBLIC_MODE:
+    if AUTH_ENABLED:
+        auth.connect().close()
+    elif not PUBLIC_MODE:
         db.init()
     yield
 
@@ -51,10 +60,28 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Estudio Dunlosky", version="1.0.0", lifespan=lifespan)
 
 
+def _https(request: Request) -> bool:
+    return request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+
+
 @app.middleware("http")
-async def visitor_scope(request: Request, call_next):
+async def data_scope(request: Request, call_next):
+    """Elige la base de datos de quien hace el pedido: la de su cuenta (o la del visitante)."""
     path = request.url.path
-    if not PUBLIC_MODE or path.startswith("/static") or path == "/api/health":
+    if path.startswith("/static") or path == "/" or path.startswith(AUTH_FREE):
+        return await call_next(request)
+    if AUTH_ENABLED:
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        user = auth.user_from_token(request.cookies.get(auth.SESSION_COOKIE))
+        if not user:
+            return JSONResponse({"detail": "Iniciá sesión para continuar."}, status_code=401)
+        token = db.use_path(auth.user_db_path(user["id"]))
+        try:
+            return await call_next(request)
+        finally:
+            db.reset_path(token)
+    if not PUBLIC_MODE:
         return await call_next(request)
     vid = request.cookies.get(VISITOR_COOKIE, "")
     is_new = not re.fullmatch(r"[0-9a-f]{32}", vid)
@@ -66,10 +93,88 @@ async def visitor_scope(request: Request, call_next):
     finally:
         db.reset_path(token)
     if is_new:
-        https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
         response.set_cookie(VISITOR_COOKIE, vid, max_age=60 * 60 * 24 * 365, httponly=True,
-                            samesite="lax", secure=https)
+                            samesite="lax", secure=_https(request))
     return response
+
+
+# --------------------------------------------------------------------------- #
+# Cuentas de usuario
+# --------------------------------------------------------------------------- #
+class Credentials(BaseModel):
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current: str = Field(max_length=256)
+    new: str = Field(max_length=256)
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return (fwd.split(",")[0].strip() if fwd else "") or (request.client.host if request.client else "?")
+
+
+def _login_response(request: Request, user_id: int, username: str) -> JSONResponse:
+    token = auth.create_session(user_id)
+    resp = JSONResponse({"ok": True, "user": {"id": user_id, "username": username}})
+    resp.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True,
+                    samesite="lax", secure=_https(request), path="/")
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    if not AUTH_ENABLED:
+        return {"auth_enabled": False, "user": None, "can_register": False}
+    user = auth.user_from_token(request.cookies.get(auth.SESSION_COOKIE))
+    return {"auth_enabled": True, "user": {"id": user["id"], "username": user["username"]} if user else None,
+            "can_register": ALLOW_SIGNUP or auth.users_count() == 0, "first_user": auth.users_count() == 0}
+
+
+@app.post("/api/auth/register")
+def auth_register(body: Credentials, request: Request):
+    if not AUTH_ENABLED:
+        raise HTTPException(400, "El login está desactivado.")
+    if not ALLOW_SIGNUP and auth.users_count() > 0:
+        raise HTTPException(403, "El registro de cuentas nuevas está cerrado.")
+    try:
+        user_id = auth.register(body.username, body.password)
+    except auth.AuthError as e:
+        raise HTTPException(e.status, str(e)) from e
+    return _login_response(request, user_id, body.username.strip())
+
+
+@app.post("/api/auth/login")
+def auth_login(body: Credentials, request: Request):
+    if not AUTH_ENABLED:
+        raise HTTPException(400, "El login está desactivado.")
+    try:
+        user_id = auth.authenticate(body.username, body.password, _client_ip(request))
+    except auth.AuthError as e:
+        raise HTTPException(e.status, str(e)) from e
+    return _login_response(request, user_id, body.username.strip())
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth.delete_session(request.cookies.get(auth.SESSION_COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return resp
+
+
+@app.post("/api/auth/password")
+def auth_password(body: PasswordChange, request: Request):
+    user = auth.user_from_token(request.cookies.get(auth.SESSION_COOKIE))
+    if not user:
+        raise HTTPException(401, "Iniciá sesión para continuar.")
+    try:
+        auth.change_password(user["id"], body.current, body.new)
+    except auth.AuthError as e:
+        raise HTTPException(e.status, str(e)) from e
+    return _login_response(request, user["id"], user["username"])
 
 
 # --------------------------------------------------------------------------- #
@@ -79,12 +184,30 @@ def now_iso() -> str:
     return srs.iso(srs.now())
 
 
-def ai_config(con) -> ai.AIConfig:
+KEY_SETTING = {"anthropic": "anthropic_key", "gemini": "gemini_key"}
+MODEL_SETTING = {"anthropic": "claude_model", "gemini": "gemini_model"}
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
+MODEL_ENV = {"anthropic": "CLAUDE_MODEL", "gemini": "GEMINI_MODEL"}
+
+
+def _provider(con) -> str:
+    """Proveedor elegido; si no se eligió, el primero que tenga clave (o Claude)."""
+    chosen = (None if PUBLIC_MODE else db.get_setting(con, "ai_provider")) or os.environ.get("AI_PROVIDER", "").strip().lower()
+    if chosen in ai.PROVIDERS:
+        return chosen
+    for prov in ("anthropic", "gemini"):
+        if (not PUBLIC_MODE and db.get_setting(con, KEY_SETTING[prov])) or os.environ.get(KEY_ENV[prov]):
+            return prov
+    return "anthropic"
+
+
+def ai_config(con, provider: str | None = None) -> ai.AIConfig:
+    prov = provider or _provider(con)
     if PUBLIC_MODE:  # solo la configura el dueño del servidor, con variables de entorno
-        return ai.AIConfig(os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("CLAUDE_MODEL"))
-    key = db.get_setting(con, "anthropic_key") or os.environ.get("ANTHROPIC_API_KEY")
-    model = db.get_setting(con, "claude_model") or os.environ.get("CLAUDE_MODEL")
-    return ai.AIConfig(key, model)
+        return ai.AIConfig(os.environ.get(KEY_ENV[prov]), os.environ.get(MODEL_ENV[prov]), prov)
+    key = db.get_setting(con, KEY_SETTING[prov]) or os.environ.get(KEY_ENV[prov])
+    model = db.get_setting(con, MODEL_SETTING[prov]) or os.environ.get(MODEL_ENV[prov])
+    return ai.AIConfig(key, model, prov)
 
 
 def topic_keywords(con, topic_id: int) -> dict:
@@ -121,11 +244,11 @@ def insert_items(con, topic_id: int, section_id: int, items: list[dict]) -> list
     for it in items:
         cur = con.execute(
             "INSERT INTO items(topic_id, section_id, sentence_idx, kind, prompt, answer, options, context, hint,"
-            " term_kind, origin, level, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " term_kind, origin, level, explanation, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (topic_id, section_id, it.get("sentence_idx"), it["kind"], it["prompt"], it["answer"],
              json.dumps(it["options"], ensure_ascii=False) if it.get("options") else None,
              it.get("context"), it.get("hint"), it.get("term_kind"), it.get("origin", "auto"),
-             it.get("level") or generator.level_for(it), ts),
+             it.get("level") or generator.level_for(it), it.get("explanation"), ts),
         )
         ids.append(cur.lastrowid)
     return ids
@@ -141,6 +264,7 @@ def public_item(it: dict, meta: dict) -> dict:
         "section_title": s.get("title"), "seen": it["seen"], "last_verdict": it["last_verdict"],
         "term": it.get("_term"),
         "level": it.get("level") or 2,
+        "has_explanation": bool(it.get("explanation")),
     }
 
 
@@ -161,28 +285,72 @@ def meta_for(con, items: list[dict]) -> dict:
 def status():
     with db.tx() as con:
         cfg = ai_config(con)
-        return {"ok": True, "public": PUBLIC_MODE, "ai_enabled": cfg.enabled, "model": cfg.model if cfg.enabled else None,
-                "key_from": "ajustes" if db.get_setting(con, "anthropic_key") else (
-                    "entorno" if os.environ.get("ANTHROPIC_API_KEY") else None)}
+        providers = {}
+        for prov, meta in ai.PROVIDERS.items():
+            c = ai_config(con, prov)
+            providers[prov] = {
+                "name": meta["name"], "default_model": meta["default_model"], "has_key": c.enabled,
+                "model": c.model,
+                "key_from": "ajustes" if (not PUBLIC_MODE and db.get_setting(con, KEY_SETTING[prov])) else (
+                    "entorno" if os.environ.get(KEY_ENV[prov]) else None),
+            }
+        keys = search_keys(con)
+        searchers = {name: {"has_key": bool(keys.get(name)),
+                            "key_from": "ajustes" if (not PUBLIC_MODE and db.get_setting(con, setting)) else (
+                                "entorno" if os.environ.get(env) else None)}
+                     for name, (setting, env) in SEARCH_KEYS.items()}
+        return {"ok": True, "public": PUBLIC_MODE, "ai_enabled": cfg.enabled, "provider": cfg.provider,
+                "searchers": searchers,
+                "only_ai_questions": (db.get_setting(con, "only_ai_questions") or "1") == "1",
+                "model": cfg.model if cfg.enabled else None, "label": cfg.label if cfg.enabled else None,
+                "providers": providers, "key_from": providers[cfg.provider]["key_from"]}
 
 
 class SettingsIn(BaseModel):
+    only_ai_questions: bool | None = None
+    search_keys: dict[str, str | None] | None = None  # {"tavily": "...", "brave": "", "openalex": None}
+    provider: str | None = None      # anthropic | gemini | off
+    key: str | None = None           # clave para el proveedor elegido
+    model: str | None = None
+    clear_key: bool = False
+    # compatibilidad con la versión anterior
     anthropic_key: str | None = None
     claude_model: str | None = None
-    clear_key: bool = False
 
 
 @app.post("/api/settings")
 def save_settings(body: SettingsIn):
-    if PUBLIC_MODE:
+    if PUBLIC_MODE and (body.provider or body.key or body.model is not None or body.clear_key
+                        or body.anthropic_key or body.claude_model is not None):
         raise HTTPException(403, "En la versión pública los ajustes de IA no se pueden cambiar.")
+    if PUBLIC_MODE and body.search_keys:
+        raise HTTPException(403, "En la versión pública las claves no se pueden cambiar.")
     with db.tx() as con:
-        if body.clear_key:
-            db.set_setting(con, "anthropic_key", None)
-        elif body.anthropic_key:
-            db.set_setting(con, "anthropic_key", body.anthropic_key.strip())
-        if body.claude_model is not None:
-            db.set_setting(con, "claude_model", body.claude_model.strip() or None)
+        for name, value in (body.search_keys or {}).items():
+            if name in SEARCH_KEYS:
+                db.set_setting(con, SEARCH_KEYS[name][0], (value or "").strip() or None)
+        if body.only_ai_questions is not None:
+            db.set_setting(con, "only_ai_questions", "1" if body.only_ai_questions else "0")
+            for r in con.execute("SELECT id FROM topics").fetchall():
+                apply_question_preference(con, r["id"])
+        touches_ai = (body.provider or body.key or body.model is not None or body.clear_key
+                      or body.anthropic_key or body.claude_model is not None)
+        if touches_ai:
+            prov = body.provider
+            if prov and prov not in ai.PROVIDERS:
+                raise HTTPException(400, "Proveedor de IA desconocido.")
+            if body.anthropic_key or body.claude_model is not None:  # formato anterior
+                prov = prov or "anthropic"
+                body.key = body.key or body.anthropic_key
+                body.model = body.model if body.model is not None else body.claude_model
+            prov = prov or _provider(con)
+            db.set_setting(con, "ai_provider", prov)
+            if body.clear_key:
+                db.set_setting(con, KEY_SETTING[prov], None)
+            elif body.key and body.key.strip():
+                db.set_setting(con, KEY_SETTING[prov], body.key.strip())
+            if body.model is not None:
+                db.set_setting(con, MODEL_SETTING[prov], body.model.strip() or None)
     return status()
 
 
@@ -193,36 +361,156 @@ async def test_ai():
     with db.tx() as con:
         cfg = ai_config(con)
     if not cfg.enabled:
-        return {"ok": False, "message": "No hay ninguna clave configurada."}
+        return {"ok": False, "message": "No hay ninguna clave configurada para ese proveedor."}
     ok, msg = await ai.test_connection(cfg)
-    return {"ok": ok, "message": msg if not ok else f"Conectado con {cfg.model}."}
+    return {"ok": ok, "message": msg if not ok else (f"Conectado con {cfg.label}." if msg == "OK" else msg)}
 
 
 # --------------------------------------------------------------------------- #
 # Búsqueda de fuentes y creación de temas
 # --------------------------------------------------------------------------- #
+WEB_SITE = {"site": "web", "name": "Google (vía Gemini)", "about": "Páginas web que encuentra Google", "lang": "es",
+            "group": "Web"}
+WIKI_GROUP = "Enciclopedias y libros"
+SEARCH_KEYS = {"tavily": ("tavily_key", "TAVILY_API_KEY"), "brave": ("brave_key", "BRAVE_API_KEY"),
+               "openalex": ("openalex_key", "OPENALEX_API_KEY")}
+
+
+def search_keys(con) -> dict:
+    """Claves de los buscadores (Ajustes o variables de entorno) y la de Claude para su búsqueda web."""
+    keys = {}
+    for name, (setting, env) in SEARCH_KEYS.items():
+        keys[name] = ((None if PUBLIC_MODE else db.get_setting(con, setting)) or os.environ.get(env) or "").strip() or None
+    claude = ai_config(con, "anthropic")
+    keys["anthropic"] = claude.key
+    keys["anthropic_model"] = claude.model
+    return keys
+
+
+def _provider_available(site: str, keys: dict) -> bool:
+    meta = search_providers.PROVIDERS[site]
+    if meta.get("needs") == "anthropic":
+        return bool(keys.get("anthropic"))
+    if meta.get("key") and not meta.get("key_optional"):
+        return bool(keys.get(site))
+    return True
+
+
 @app.get("/api/sources")
 def list_sources():
-    return [{"site": k, "name": v["name"], "about": v["about"], "lang": v["lang"],
-             "default": k in sources.DEFAULT_SEARCH} for k, v in sources.SITES.items()]
+    with db.tx() as con:
+        cfg = ai_config(con)
+        keys = search_keys(con)
+    out = [{"site": k, "name": v["name"], "about": v["about"], "lang": v["lang"], "group": WIKI_GROUP,
+            "default": k in sources.DEFAULT_SEARCH, "available": True} for k, v in sources.SITES.items()]
+    google_ok = cfg.enabled and cfg.provider == "gemini"
+    out.append({**WEB_SITE, "default": google_ok, "available": google_ok,
+                "why_off": "Configurá una clave de Gemini en Ajustes"})
+    for k, v in search_providers.PROVIDERS.items():
+        ok = _provider_available(k, keys)
+        why = ("Configurá una clave de Claude en Ajustes" if v.get("needs") == "anthropic"
+               else f"Configurá la clave de {v['name']} en Ajustes")
+        out.append({"site": k, "name": v["name"], "about": v["about"], "lang": "es", "group": v["group"],
+                    "default": ok and k == "tavily", "available": ok, "why_off": why})
+    return out
+
+
+async def _google_group(q: str) -> dict:
+    with db.tx() as con:
+        cfg = ai_config(con)
+    try:
+        found = await ai.web_search(cfg, q)
+        return {**WEB_SITE, "results": found["results"], "summary": found["summary"],
+                "suggestions_html": found["suggestions_html"]}
+    except ai.SearchUnavailable as e:
+        return {**WEB_SITE, "results": [], "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        msg = ("Se alcanzó el límite de búsquedas de tu clave de Gemini." if code == 429 else
+               "Tu clave de Gemini no tiene habilitada la búsqueda en Google." if code in (400, 403) else
+               "Google no respondió; probá de nuevo en un momento.")
+        return {**WEB_SITE, "results": [], "error": msg}
+
+
+async def _provider_group(site: str, q: str, keys: dict, hint: str = "", arxiv_cats: list | None = None) -> dict:
+    meta = search_providers.PROVIDERS[site]
+    base = {"site": site, "name": meta["name"], "about": meta["about"], "group": meta["group"]}
+    if not _provider_available(site, keys):
+        return {**base, "results": [], "error": "Falta configurar la clave en Ajustes."}
+    try:
+        return {**base, "results": await search_providers.search(site, q, keys, hint, arxiv_cats)}
+    except sources.SourceError as e:
+        return {**base, "results": [], "error": str(e)}
+    except Exception:  # noqa: BLE001
+        return {**base, "results": [], "error": "No respondió; probá de nuevo en un momento."}
+
+
+@app.get("/api/categories")
+def search_categories():
+    """Categorías del buscador con las fuentes sugeridas (solo las disponibles)."""
+    with db.tx() as con:
+        keys = search_keys(con)
+        cfg = ai_config(con)
+    google_ok = cfg.enabled and cfg.provider == "gemini"
+
+    def ok(site: str) -> bool:
+        if site in sources.SITES:
+            return True
+        if site == "web":
+            return google_ok
+        return site in search_providers.PROVIDERS and _provider_available(site, keys)
+
+    return [{"key": k, "label": v["label"], "sites": [x for x in v["sites"] if ok(x)]}
+            for k, v in search_providers.CATEGORIES.items()]
 
 
 @app.get("/api/search")
-async def search(q: str, sites: str = "", lang: str | None = None):
+async def search(q: str, sites: str = "", lang: str | None = None, category: str = ""):
     q = q.strip()
     if len(q) < 2:
         raise HTTPException(400, "Escribí al menos 2 letras.")
-    chosen = [x for x in sites.split(",") if x] or (
+    cat = search_providers.CATEGORIES.get(category, {})
+    chosen = [x for x in sites.split(",") if x] or list(cat.get("sites", [])) or (
         [sources.LANG_TO_SITE.get(lang, "wikipedia_es")] if lang else sources.DEFAULT_SEARCH)
-    try:
-        res = await sources.search_many(q, chosen)
-        # si en español no hubo nada, probamos en inglés
-        if not any(g["results"] for g in res["groups"]) and "wikipedia_en" not in chosen:
-            extra = await sources.search_many(q, ["wikipedia_en"])
-            res["groups"] += extra["groups"]
-            res["fallback_en"] = any(g["results"] for g in extra["groups"])
-    except sources.SourceError as e:
-        raise HTTPException(502, str(e)) from e
+    hint = cat.get("hint", "")
+    wiki = [c for c in chosen if c in sources.SITES]
+    extra = [c for c in chosen if c in search_providers.PROVIDERS]
+    with db.tx() as con:
+        keys = search_keys(con)
+
+    async def wiki_groups():
+        if not wiki:
+            return {"groups": [], "errors": []}
+        try:
+            return await sources.search_many(q, wiki)
+        except sources.SourceError as e:
+            return {"groups": [], "errors": [{"site": "wiki", "name": "las enciclopedias", "message": str(e)}]}
+
+    tasks = [wiki_groups()]
+    if "web" in chosen:
+        tasks.append(_google_group(f"{q} {hint}".strip() if hint and hint.lower() not in q.lower() else q))
+    tasks += [_provider_group(site, q, keys, hint, cat.get("arxiv")) for site in extra]
+    results = await asyncio.gather(*tasks)
+    res = results[0]
+    for g in res["groups"]:
+        g["group"] = WIKI_GROUP
+    others = list(results[1:])
+    # orden: web primero (más amplia), después enciclopedias, después el resto
+    web = [g for g in others if g.get("group") == "Web"]
+    rest = [g for g in others if g.get("group") != "Web"]
+    res["groups"] = web + res["groups"] + rest
+    # si en español no hubo nada, probamos en inglés
+    if wiki and not any(g["results"] for g in res["groups"]) and "wikipedia_en" not in chosen:
+        try:
+            en = await sources.search_many(q, ["wikipedia_en"])
+            for g in en["groups"]:
+                g["group"] = WIKI_GROUP
+            res["groups"] += en["groups"]
+            res["fallback_en"] = any(g["results"] for g in en["groups"])
+        except sources.SourceError:
+            pass
+    if not res["groups"] and res.get("errors"):
+        raise HTTPException(502, res["errors"][0]["message"])
     return res
 
 
@@ -231,6 +519,7 @@ class SourceRef(BaseModel):
     lang: str = "es"
     site: str | None = None
     url: str | None = None
+    ref: str | None = None
 
 
 class NotesIn(BaseModel):
@@ -238,17 +527,65 @@ class NotesIn(BaseModel):
     text: str
 
 
+class MaterialIn(BaseModel):
+    query: str = Field(min_length=2, max_length=200)
+    level: str = "intermedio"
+    focus: str = Field(default="", max_length=500)
+
+
 class TopicIn(BaseModel):
     title: str | None = None
     sources: list[SourceRef] = Field(default_factory=list)
     notes: NotesIn | None = None
+    ai_material: MaterialIn | None = None
+
+
+async def _ai_material_sources(req: MaterialIn) -> list[dict]:
+    """Apunte generado por IA a partir de las fuentes abiertas (más esas fuentes, para poder verificarlo)."""
+    with db.tx() as con:
+        cfg = ai_config(con)
+    if not cfg.enabled:
+        raise HTTPException(400, "Para generar material con IA, configurá una clave en Ajustes.")
+    try:
+        found = await sources.search_many(req.query, ["wikipedia_es", "wikilibros", "wikiversidad"])
+    except sources.SourceError as e:
+        raise HTTPException(502, str(e)) from e
+    candidates = [r for g in found["groups"] for r in g["results"][:2]]
+    candidates.sort(key=lambda r: -r["words"])
+    refs = []
+    for r in candidates[:4]:
+        try:
+            refs.append(await sources.fetch_wiki(r["title"], r["site"]))
+        except sources.SourceError:
+            continue
+        if len(refs) == 2:
+            break
+    if not refs:
+        raise HTTPException(400, "No encontré fuentes abiertas sobre ese tema para basar el apunte. "
+                                 "Probá con un término más general.")
+    try:
+        text = await ai.generate_material(cfg, req.query, req.level, req.focus.strip(), refs)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "La IA no pudo generar el apunte en este momento. Probá de nuevo.") from e
+    apunte = sources.from_user_notes(req.query, text)
+    apunte.update({"source_name": f"Apunte generado con IA ({cfg.label})", "ai_material": True,
+                   "title": f"{req.query} (apunte IA, basado en {', '.join(r['title'] for r in refs)})"})
+    return [apunte] + refs
 
 
 async def _collect_sources(body: TopicIn) -> list[dict]:
     collected = []
+    if body.ai_material:
+        collected += await _ai_material_sources(body.ai_material)
     try:
+        keys = None
         for s in body.sources[:4]:
-            if s.url:
+            if s.site in search_providers.PROVIDERS:
+                if keys is None:
+                    with db.tx() as con:
+                        keys = search_keys(con)
+                collected.append(await search_providers.fetch(s.site, s.ref, s.url, keys))
+            elif s.url:
                 collected.append(await sources.fetch_url(s.url))
             else:
                 site = s.site if s.site in sources.SITES else sources.LANG_TO_SITE.get(s.lang, "wikipedia_es")
@@ -290,10 +627,37 @@ def _store_sources(con, topic_id: int, title: str, collected: list[dict]) -> lis
 
     rng = random.Random(zlib.crc32(f"{topic_id}{title}".encode()))
     cap = max(10, min(36, 420 // max(len(all_secs), 1)))
+    generated: list[dict] = []
     for sec in new_sections:
-        items = generator.generate_for_section(sec["text"], keywords, title, rng, cap)
-        insert_items(con, topic_id, sec["id"], items)
+        for it in generator.generate_for_section(sec["text"], keywords, title, rng, cap):
+            it["section_id"] = sec["id"]
+            generated.append(it)
+    generated += generator.cause_mcs(generated, rng)
+    for sec in new_sections:
+        insert_items(con, topic_id, sec["id"], [it for it in generated if it["section_id"] == sec["id"]])
     return [s["id"] for s in new_sections]
+
+
+def _chunks(secs: list[dict], size: int = 6000) -> list[list[dict]]:
+    """Agrupa secciones consecutivas en bloques de ~6000 caracteres (menos llamadas a la IA)."""
+    out, cur, length = [], [], 0
+    for sec in secs:
+        if cur and length + len(sec["text"]) > size:
+            out.append(cur)
+            cur, length = [], 0
+        cur.append(sec)
+        length += len(sec["text"])
+    if cur:
+        out.append(cur)
+    return out
+
+
+def apply_question_preference(con, topic_id: int) -> None:
+    """Si el tema ya tiene suficientes preguntas escritas por IA, oculta las automáticas (sin borrarlas)."""
+    only_ai = (db.get_setting(con, "only_ai_questions") or "1") == "1"
+    ia = con.execute("SELECT COUNT(*) FROM items WHERE topic_id=? AND origin='ia'", (topic_id,)).fetchone()[0]
+    hide = 1 if (only_ai and ia >= 8) else 0
+    con.execute("UPDATE items SET hidden=? WHERE topic_id=? AND origin IN ('auto','elab')", (hide, topic_id))
 
 
 async def _ai_enrich(topic_id: int, section_ids: list[int]) -> None:
@@ -301,35 +665,74 @@ async def _ai_enrich(topic_id: int, section_ids: list[int]) -> None:
         cfg = ai_config(con)
         t = db.row(con.execute("SELECT title FROM topics WHERE id=?", (topic_id,)).fetchone())
         secs = db.rows(con.execute(
-            f"SELECT id, title, text FROM sections WHERE id IN ({','.join('?' * len(section_ids))})", tuple(section_ids)))
-        con.execute("UPDATE topics SET ai_status='generando' WHERE id=?", (topic_id,))
-    if not cfg.enabled or not t:
-        return
+            f"SELECT id, title, text FROM sections WHERE id IN ({','.join('?' * len(section_ids))}) ORDER BY ord",
+            tuple(section_ids)))
+        if not cfg.enabled or not t or not secs:
+            return
+    groups = _chunks(secs)[:15]
     added = 0
-    secs.sort(key=lambda s: -len(s["text"]))
-    for sec in secs[:6]:
-        qs = await ai.generate_questions(cfg, t["title"], sec["title"], sec["text"], 5)
-        sents = section_sentence_list(sec["text"])
+    for n, group in enumerate(groups, 1):
+        with db.tx() as con:
+            con.execute("UPDATE topics SET ai_status=? WHERE id=?", (f"generando {n}/{len(groups)}", topic_id))
+        text = "\n\n".join(f"[{s['title']}]\n{s['text']}" for s in group)
+        amount = max(4, min(12, len(text) // 550))
+        qs = await ai.generate_questions(cfg, t["title"], ", ".join(s["title"] for s in group), text, amount)
+        by_section: dict[int, list[dict]] = defaultdict(list)
         for q in qs:
             nq = tp.normalize(q["context"])
-            best = max(range(len(sents)), key=lambda i: fuzz.partial_ratio(nq, tp.normalize(sents[i])), default=None)
-            q["sentence_idx"] = best
+            # ubicar la sección y la oración de la cita, para la evidencia y la práctica de errores
+            best_sec, best_idx, best_score = group[0], None, -1
+            for sec in group:
+                for i, sent in enumerate(section_sentence_list(sec["text"])):
+                    sc = fuzz.partial_ratio(nq, tp.normalize(sent))
+                    if sc > best_score:
+                        best_sec, best_idx, best_score = sec, i, sc
+            q["sentence_idx"] = best_idx
+            by_section[best_sec["id"]].append(q)
         with db.tx() as con:
-            if con.execute("SELECT 1 FROM topics WHERE id=?", (topic_id,)).fetchone():
-                insert_items(con, topic_id, sec["id"], qs)
-                added += len(qs)
+            if not con.execute("SELECT 1 FROM topics WHERE id=?", (topic_id,)).fetchone():
+                return  # el tema se borró mientras se generaba
+            existing = {tp.normalize(r["prompt"]) for r in con.execute(
+                "SELECT prompt FROM items WHERE topic_id=? AND origin='ia'", (topic_id,))}
+            for sid, items in by_section.items():
+                items = [q for q in items if tp.normalize(q["prompt"]) not in existing]
+                insert_items(con, topic_id, sid, items)
+                added += len(items)
+            apply_question_preference(con, topic_id)
+        if n < len(groups):
+            await asyncio.sleep(1.5)  # no saturar el límite por minuto del nivel gratuito
     with db.tx() as con:
-        con.execute("UPDATE topics SET ai_status=? WHERE id=?", ("listo" if added else "sin_resultados", topic_id))
+        total = con.execute("SELECT COUNT(*) FROM items WHERE topic_id=? AND origin='ia'", (topic_id,)).fetchone()[0]
+        con.execute("UPDATE topics SET ai_status=? WHERE id=?", ("listo" if total else "sin_resultados", topic_id))
+        apply_question_preference(con, topic_id)
+
+
+@app.post("/api/topics/{topic_id}/ai-questions")
+async def regenerate_ai_questions(topic_id: int, bg: BackgroundTasks):
+    """Genera (o suma) preguntas escritas por IA para todo el tema, conservando el progreso."""
+    with db.tx() as con:
+        if not con.execute("SELECT 1 FROM topics WHERE id=?", (topic_id,)).fetchone():
+            raise HTTPException(404, "Tema no encontrado")
+        cfg = ai_config(con)
+        if not cfg.enabled:
+            raise HTTPException(400, "Configurá una clave de IA en Ajustes para generar preguntas con IA.")
+        st = con.execute("SELECT ai_status FROM topics WHERE id=?", (topic_id,)).fetchone()[0] or ""
+        if st.startswith("generando"):
+            raise HTTPException(409, "Ya se están generando preguntas para este tema.")
+        ids = [r["id"] for r in con.execute("SELECT id FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,))]
+        con.execute("UPDATE topics SET ai_status='generando' WHERE id=?", (topic_id,))
+    bg.add_task(_ai_enrich, topic_id, ids)
+    return {"ok": True}
 
 
 @app.post("/api/topics")
 async def create_topic(body: TopicIn, bg: BackgroundTasks):
     collected = await _collect_sources(body)
-    title = (body.title or "").strip() or collected[0]["title"]
+    title = (body.title or "").strip() or (body.ai_material.query if body.ai_material else collected[0]["title"])
     with db.tx() as con:
         hue = random.Random(title).choice([12, 38, 150, 175, 200, 232, 262, 300, 330])
-        cur = con.execute("INSERT INTO topics(title, lang, hue, created_at) VALUES(?,?,?,?)",
-                          (title, collected[0]["lang"], hue, now_iso()))
+        cur = con.execute("INSERT INTO topics(title, lang, hue, ai_generated, created_at) VALUES(?,?,?,?,?)",
+                          (title, collected[0]["lang"], hue, int(any(c.get("ai_material") for c in collected)), now_iso()))
         topic_id = cur.lastrowid
         new_ids = _store_sources(con, topic_id, title, collected)
         cfg = ai_config(con)
@@ -360,7 +763,7 @@ def delete_topic(topic_id: int):
 
 
 def _topic_stats(con, topic_id: int | None = None) -> dict:
-    where = "WHERE topic_id=?" if topic_id else ""
+    where = "WHERE hidden=0 AND topic_id=?" if topic_id else "WHERE hidden=0"
     args = (topic_id,) if topic_id else ()
     rs = db.rows(con.execute(
         f"SELECT topic_id, section_id, seen, correct, reps, due, last_verdict FROM items {where}", args))
@@ -399,7 +802,7 @@ def list_topics():
 @app.get("/api/topics/{topic_id}")
 def get_topic(topic_id: int):
     with db.tx() as con:
-        t = db.row(con.execute("SELECT id, title, lang, hue, ai_status, created_at FROM topics WHERE id=?",
+        t = db.row(con.execute("SELECT id, title, lang, hue, ai_status, ai_generated, created_at FROM topics WHERE id=?",
                                (topic_id,)).fetchone())
         if not t:
             raise HTTPException(404, "Tema no encontrado")
@@ -407,10 +810,13 @@ def get_topic(topic_id: int):
         secs = db.rows(con.execute("SELECT id, source_id, ord, title, text FROM sections WHERE topic_id=? ORDER BY ord",
                                    (topic_id,)))
         stats = _topic_stats(con, topic_id)
-        kinds = Counter(r["kind"] for r in con.execute("SELECT kind FROM items WHERE topic_id=?", (topic_id,)))
+        kinds = Counter(r["kind"] for r in con.execute("SELECT kind FROM items WHERE topic_id=? AND hidden=0", (topic_id,)))
+        auto_items = con.execute("SELECT COUNT(*) FROM items WHERE topic_id=? AND origin IN ('auto','elab')", (topic_id,)).fetchone()[0]
+        hidden_items = con.execute("SELECT COUNT(*) FROM items WHERE topic_id=? AND hidden=1", (topic_id,)).fetchone()[0]
+        ai_items = con.execute("SELECT COUNT(*) FROM items WHERE topic_id=? AND origin='ia'", (topic_id,)).fetchone()[0]
         today = datetime.now(LOCAL_TZ).date()
         upcoming = Counter()
-        for r in con.execute("SELECT due FROM items WHERE topic_id=? AND due IS NOT NULL", (topic_id,)):
+        for r in con.execute("SELECT due FROM items WHERE topic_id=? AND hidden=0 AND due IS NOT NULL", (topic_id,)):
             d = local_day(r["due"])
             upcoming[max(d, today.isoformat())] += 1
         t["upcoming"] = [{"day": (today + timedelta(days=i)).isoformat(),
@@ -429,6 +835,9 @@ def get_topic(topic_id: int):
     t["sections"] = secs
     t["stats"] = stats.get(("t", topic_id), {})
     t["kinds"] = kinds
+    t["ai_items"] = ai_items
+    t["auto_items"] = auto_items
+    t["hidden_items"] = hidden_items
     return t
 
 
@@ -465,7 +874,9 @@ def _priority(it: dict, now: str) -> tuple:
     due = it["due"] is not None and it["due"] <= now
     unseen = it["seen"] == 0
     acc = it["correct"] / it["seen"] if it["seen"] else 1
-    return (0 if due else (1 if unseen else 2), acc, random.random())
+    # las preguntas escritas por IA van primero; después las conceptuales automáticas
+    quality = 0 if it.get("origin") == "ia" else (1 if it.get("term_kind") in ("statement", "cause") else 2)
+    return (0 if due else (1 if unseen else 2), quality, acc, random.random())
 
 
 def _pick_varied(cands: list[dict], n: int, one_per_sentence: bool = True) -> list[dict]:
@@ -512,7 +923,7 @@ def _siblings(con, it: dict, exclude: set[int], k: int = 1) -> list[dict]:
     if it["sentence_idx"] is None:
         return []
     rs = [db.item_dict(r) for r in con.execute(
-        "SELECT * FROM items WHERE section_id=? AND sentence_idx BETWEEN ? AND ? AND id<>?",
+        "SELECT * FROM items WHERE section_id=? AND hidden=0 AND sentence_idx BETWEEN ? AND ? AND id<>?",
         (it["section_id"], it["sentence_idx"] - 1, it["sentence_idx"] + 1, it["id"]))]
     rs = [r for r in rs if r["id"] not in exclude]
     rs.sort(key=lambda r: (r["sentence_idx"] != it["sentence_idx"], r["kind"] == it["kind"], random.random()))
@@ -552,7 +963,7 @@ def build_session(body: SessionIn):
     eot = end_of_today_utc()
     with db.tx() as con:
         def load(sql, args=()):
-            return [db.item_dict(r) for r in con.execute(sql, args)]
+            return [d for d in (db.item_dict(r) for r in con.execute(sql, args)) if not d.get("hidden")]
 
         tids = body.topic_ids or [r["id"] for r in con.execute("SELECT id FROM topics")]
         ph = ",".join("?" * len(tids)) or "NULL"
@@ -742,6 +1153,7 @@ async def answer(body: AnswerIn):
         "next_due": new["due"],
         "interval_days": new["interval"],
         "siblings": siblings,
+        "explanation": item.get("explanation"),
         "self_check": item["kind"] in ("open", "why", "relate"),
     }
 
@@ -791,7 +1203,7 @@ def summary(body: SummaryIn):
         kw = topic_keywords(con, sec["topic_id"])
         fb = grader.grade_summary(sec["text"], body.text, kw)
         items = [db.item_dict(r) for r in con.execute(
-            "SELECT * FROM items WHERE section_id=? AND kind IN ('cloze','mc','open','why')", (sec["id"],))]
+            "SELECT * FROM items WHERE section_id=? AND hidden=0 AND kind IN ('cloze','mc','open','why')", (sec["id"],))]
         practice = []
         for concept in fb["missing"]:
             nc = tp.normalize(concept)
@@ -829,7 +1241,7 @@ def highlight(body: HighlightIn):
         fb["key"] = key
         sel = set(body.selected)
         ids = [r["id"] for r in con.execute(
-            "SELECT id, sentence_idx FROM items WHERE section_id=? AND kind IN ('cloze','mc','tf','open','why')",
+            "SELECT id, sentence_idx FROM items WHERE section_id=? AND hidden=0 AND kind IN ('cloze','mc','tf','open','why')",
             (sec["id"],)) if r["sentence_idx"] in sel]
         fb["practice_ids"] = ids[:20]
         _note(con, sec["topic_id"], sec["id"], "highlight", json.dumps(sorted(sel)), None, fb)
@@ -909,7 +1321,7 @@ def topic_terms(topic_id: int):
 def topic_errors(topic_id: int):
     with db.tx() as con:
         rs = [db.item_dict(r) for r in con.execute(
-            "SELECT * FROM items WHERE topic_id=? AND last_verdict IN ('incorrect','partial') ORDER BY lapses DESC",
+            "SELECT * FROM items WHERE topic_id=? AND hidden=0 AND last_verdict IN ('incorrect','partial') ORDER BY lapses DESC",
             (topic_id,))]
         meta = meta_for(con, rs) if rs else {"sections": {}}
     return [{"id": r["id"], "kind": r["kind"], "prompt": r["prompt"], "answer": r["answer"],
@@ -927,7 +1339,7 @@ def dashboard():
         totals = dict(con.execute(
             "SELECT COUNT(*) AS items, SUM(seen>0) AS seen, SUM(reps>=3) AS mastered,"
             " SUM(due IS NOT NULL AND due<=?) AS due, SUM(last_verdict IN ('incorrect','partial')) AS errors"
-            " FROM items", (eot,)).fetchone())
+            " FROM items WHERE hidden=0", (eot,)).fetchone())
         totals = {k: v or 0 for k, v in totals.items()}
         totals["topics"] = con.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
 
@@ -984,21 +1396,131 @@ def dashboard():
 
 
 # --------------------------------------------------------------------------- #
-# Exportar a PDF
+# Conceptos clicables y explicaciones ("¿por qué?")
 # --------------------------------------------------------------------------- #
-@app.get("/api/topics/{topic_id}/export.pdf")
-def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen", max_per_section: int = 12):
-    from . import export_pdf  # importación diferida: reportlab solo se carga al exportar
+CAUSAL = re.compile(r"\b(porque|ya que|debido a|puesto que|dado que|gracias a|por lo que|por eso|por lo tanto|"
+                    r"lo que permite|lo que provoca|lo que provocó|de modo que|a causa de|con el fin de|para que|"
+                    r"because|due to|therefore)\b", re.I)
 
-    layout = layout if layout in ("examen", "estudio") else "examen"
+
+@app.get("/api/topics/{topic_id}/concepts")
+def topic_concepts(topic_id: int):
+    with db.tx() as con:
+        kw = topic_keywords(con, topic_id)
+        text = "\n".join(r["text"] for r in con.execute("SELECT text FROM sections WHERE topic_id=?", (topic_id,)))
+    norm_text = tp.strip_accents(text.lower())
+    arts = r"(?:el|la|los|las|un|una|unos|unas|del|al|este|esta|estos|estas|su|sus)"
+
+    def is_noun(t: str) -> bool:
+        # los conceptos (no nombres propios) tienen que aparecer alguna vez después de un artículo:
+        # así se descartan verbos y adjetivos sueltos ("convierten", "directa")
+        if tp.term_kind(t) == "proper":
+            return True
+        return re.search(rf"\b{arts}\s+{re.escape(tp.strip_accents(t.lower()))}\b", norm_text) is not None
+
+    generic = {"mayoria", "seres", "parte", "partes", "forma", "tipo", "tipos", "vez", "veces", "noche", "dia", "caso",
+               "casos", "ejemplo", "manera", "cosa", "cosas", "lugar", "momento", "nivel", "numero", "uso", "mundo"}
+    terms = [t for t in tp.key_terms(text, kw, top=80)
+             if tp.term_kind(t) not in ("year", "number") and len(t) >= 3 and tp.normalize(t) not in generic and is_noun(t)]
+    return {"terms": terms[:40]}
+
+
+@app.get("/api/topics/{topic_id}/concept")
+async def topic_concept(topic_id: int, term: str):
+    term = term.strip()[:120]
+    nt = tp.normalize(term)
     with db.tx() as con:
         t = db.row(con.execute("SELECT id, title FROM topics WHERE id=?", (topic_id,)).fetchone())
         if not t:
             raise HTTPException(404, "Tema no encontrado")
-        srcs = db.rows(con.execute("SELECT name, title, url, license FROM sources WHERE topic_id=?", (topic_id,)))
-        secs = db.rows(con.execute("SELECT id, title FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
-        items = [db.item_dict(r) for r in con.execute(
-            "SELECT * FROM items WHERE topic_id=? ORDER BY section_id, sentence_idx, id", (topic_id,))]
+        kw = topic_keywords(con, topic_id)
+        mentions = []
+        for sec in db.rows(con.execute("SELECT id, title, text FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,))):
+            for i, sent in enumerate(section_sentence_list(sec["text"])):
+                if re.search(rf"(?<![a-z0-9ñ]){re.escape(nt)}(?![a-z0-9ñ])", tp.normalize(sent)):
+                    mentions.append({"section_id": sec["id"], "section_title": sec["title"], "idx": i, "text": sent})
+        best = _definition_sentence(con, topic_id, term, kw)
+        cached = con.execute("SELECT content FROM concept_cache WHERE topic_id=? AND term=?", (topic_id, nt)).fetchone()
+        cfg = ai_config(con)
+        practice = con.execute(
+            "SELECT COUNT(*) FROM items WHERE topic_id=? AND kind IN ('cloze','mc') AND lower(answer)=lower(?)",
+            (topic_id, term)).fetchone()[0]
+    reasons = [m for m in mentions if CAUSAL.search(m["text"])][:3]
+    explanation = json.loads(cached["content"]) if cached else None
+    if explanation is None and cfg.enabled and mentions:
+        explanation = await ai.explain_concept(cfg, t["title"], term, [m["text"] for m in mentions])
+        if explanation and any(explanation.values()):
+            with db.tx() as con:
+                con.execute("INSERT OR REPLACE INTO concept_cache(topic_id, term, content, created_at) VALUES(?,?,?,?)",
+                            (topic_id, nt, json.dumps(explanation, ensure_ascii=False), now_iso()))
+    return {"term": term, "definition": best[2] if best else (mentions[0]["text"] if mentions else None),
+            "reasons": reasons, "mentions": mentions[:6], "total_mentions": len(mentions),
+            "explanation": explanation, "ai_enabled": cfg.enabled, "by": cfg.label if explanation else None,
+            "practice": practice}
+
+
+@app.post("/api/items/{item_id}/explain")
+async def explain_item(item_id: int):
+    with db.tx() as con:
+        r = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        if not r:
+            raise HTTPException(404, "Pregunta no encontrada")
+        it = db.item_dict(r)
+        around = []
+        if it["section_id"] is not None and it["sentence_idx"] is not None:
+            sec = get_section(con, it["section_id"])
+            sents = section_sentence_list(sec["text"])
+            i = it["sentence_idx"]
+            around = sents[max(0, i - 1): i + 2]
+        cfg = ai_config(con)
+    if it.get("explanation"):
+        return {"explanation": it["explanation"], "by": "ia", "around": around}
+    if cfg.enabled:
+        text = await ai.explain_answer(cfg, it["prompt"], it["answer"], it.get("options"),
+                                       " ".join(around) or (it.get("context") or ""))
+        if text:
+            with db.tx() as con:
+                con.execute("UPDATE items SET explanation=? WHERE id=?", (text, item_id))
+            return {"explanation": text, "by": "ia", "around": around}
+    return {"explanation": None, "by": None, "around": around, "ai_enabled": cfg.enabled}
+
+
+@app.post("/api/topics/{topic_id}/enrich")
+async def enrich_topic(topic_id: int, bg: BackgroundTasks):
+    """Agrega preguntas conceptuales nuevas a un tema existente (sin borrar el progreso)."""
+    with db.tx() as con:
+        t = db.row(con.execute("SELECT id, title FROM topics WHERE id=?", (topic_id,)).fetchone())
+        if not t:
+            raise HTTPException(404, "Tema no encontrado")
+        secs = db.rows(con.execute("SELECT id, title, text FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
+        all_sentences = [x for sec in secs for _, x in tp.section_sentences(sec["text"])]
+        keywords = tp.extract_keywords(all_sentences, t["title"])
+        con.execute("UPDATE topics SET keywords=? WHERE id=?", (json.dumps(keywords, ensure_ascii=False), topic_id))
+        existing = {(r["prompt"], r["answer"]) for r in con.execute("SELECT prompt, answer FROM items WHERE topic_id=?", (topic_id,))}
+        rng = random.Random()
+        dis = generator.Distractors(keywords, rng)
+        new: list[dict] = []
+        for sec in secs:
+            sents = section_sentence_list(sec["text"])
+            for it in generator._statement_mcs(sents, keywords, t["title"], dis, rng):
+                it["section_id"] = sec["id"]
+                new.append(it)
+        whys = [db.item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE topic_id=? AND kind='why' AND origin='auto'", (topic_id,))]
+        new += generator.cause_mcs(whys, rng)
+        new = [it for it in new if (it["prompt"], it["answer"]) not in existing]
+        for sec in secs:
+            insert_items(con, topic_id, sec["id"], [it for it in new if it["section_id"] == sec["id"]])
+        cfg = ai_config(con)
+    if cfg.enabled:
+        bg.add_task(_ai_enrich, topic_id, [s["id"] for s in secs])
+    return {"added": len(new), "ai": cfg.enabled}
+
+
+# --------------------------------------------------------------------------- #
+# Exportar a PDF
+# --------------------------------------------------------------------------- #
+def _export_questions(items: list[dict], secs: list[dict], level: str, max_per_section: int) -> dict[int, list[dict]]:
     wanted = {"basico": {1}, "intermedio": {2}, "avanzado": {3}}.get(level)
     per_section: dict[int, list[dict]] = defaultdict(list)
     for sec in secs:
@@ -1014,12 +1536,74 @@ def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen"
             per_section[sec["id"]].append(choice)
             if len(per_section[sec["id"]]) >= max(1, min(max_per_section, 40)):
                 break
-    label = {"basico": "Nivel básico", "intermedio": "Nivel intermedio", "avanzado": "Nivel avanzado"}.get(
-        level, "Todos los niveles")
-    pdf = export_pdf.build_pdf(t, srcs, secs, per_section, layout, label)
+    return per_section
+
+
+def _notes_sections(con, topic_id: int, secs: list[dict]) -> list[dict]:
+    """Texto de cada sección en párrafos, marcando las oraciones que el usuario resaltó."""
+    out = []
+    for sec in secs:
+        hl: set[int] = set()
+        for r in con.execute("SELECT ref FROM notes WHERE topic_id=? AND section_id=? AND technique='highlight' "
+                             "ORDER BY id DESC LIMIT 1", (topic_id, sec["id"])):
+            try:
+                hl = {int(x) for x in json.loads(r["ref"] or "[]")}
+            except (ValueError, TypeError):
+                hl = set()
+        summ = con.execute("SELECT content FROM notes WHERE topic_id=? AND section_id=? AND technique='summary' "
+                           "AND content IS NOT NULL ORDER BY id DESC LIMIT 1", (topic_id, sec["id"])).fetchone()
+        paragraphs: list[list[tuple[str, bool]]] = []
+        last_p = None
+        for idx, (pi, sent) in enumerate(tp.section_sentences(sec["text"])):
+            if pi != last_p:
+                paragraphs.append([])
+                last_p = pi
+            paragraphs[-1].append((sent, idx in hl))
+        out.append({"id": sec["id"], "title": sec["title"], "paragraphs": paragraphs,
+                    "summary": summ["content"] if summ else None})
+    return out
+
+
+@app.get("/api/topics/{topic_id}/export.pdf")
+def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen", max_per_section: int = 12,
+                     content: str = "preguntas"):
+    """content: "preguntas" (cuestionario), "apunte" (material de estudio) o "ambos"."""
+    from . import export_pdf  # importación diferida: reportlab solo se carga al exportar
+
+    layout = layout if layout in ("examen", "estudio") else "examen"
+    content = content if content in ("preguntas", "apunte", "ambos") else "preguntas"
+    with db.tx() as con:
+        t = db.row(con.execute("SELECT id, title, ai_generated FROM topics WHERE id=?", (topic_id,)).fetchone())
+        if not t:
+            raise HTTPException(404, "Tema no encontrado")
+        srcs = db.rows(con.execute("SELECT name, title, url, license FROM sources WHERE topic_id=?", (topic_id,)))
+        secs = db.rows(con.execute("SELECT id, title, text FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
+        items = [db.item_dict(r) for r in con.execute(
+            "SELECT * FROM items WHERE topic_id=? AND hidden=0 ORDER BY section_id, sentence_idx, id", (topic_id,))]
+        notes_secs = _notes_sections(con, topic_id, secs) if content != "preguntas" else []
+        glossary = []
+        if content != "preguntas":
+            for r in con.execute("SELECT term, content FROM concept_cache WHERE topic_id=? ORDER BY term", (topic_id,)):
+                try:
+                    g = json.loads(r["content"])
+                except ValueError:
+                    continue
+                if isinstance(g, dict) and any(g.values()):
+                    glossary.append({"term": r["term"], **{k: str(g.get(k) or "") for k in
+                                                           ("que_es", "por_que", "ejemplo", "relacion")}})
+    per_section = _export_questions(items, secs, level, max_per_section)
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", tp.strip_accents(t["title"])).strip("_") or "tema"
+    if content == "preguntas":
+        label = {"basico": "Nivel básico", "intermedio": "Nivel intermedio", "avanzado": "Nivel avanzado"}.get(
+            level, "Todos los niveles")
+        pdf = export_pdf.build_pdf(t, srcs, secs, per_section, layout, label)
+        fname = f"{safe}_preguntas.pdf"
+    else:
+        pdf = export_pdf.build_notes_pdf(t, srcs, notes_secs, glossary, bool(t.get("ai_generated")),
+                                         per_section if content == "ambos" else None)
+        fname = f"{safe}_apunte.pdf"
     return Response(pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{safe}_preguntas.pdf"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 # --------------------------------------------------------------------------- #

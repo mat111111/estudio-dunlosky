@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS topics (
     hue INTEGER DEFAULT 220,
     keywords TEXT DEFAULT '{}',
     ai_status TEXT DEFAULT NULL,
+    ai_generated INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sources (
@@ -61,6 +62,8 @@ CREATE TABLE IF NOT EXISTS items (
     term_kind TEXT,
     origin TEXT DEFAULT 'auto',
     level INTEGER DEFAULT 2,
+    explanation TEXT,
+    hidden INTEGER DEFAULT 0,
     ease REAL DEFAULT 2.5,
     interval REAL DEFAULT 0,
     reps INTEGER DEFAULT 0,
@@ -110,6 +113,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     pomodoros INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS concept_cache (
+    topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    term TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (topic_id, term)
+);
 CREATE TABLE IF NOT EXISTS pomodoros (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
@@ -123,6 +133,9 @@ MIGRATIONS = [
     ("items", "level", "ALTER TABLE items ADD COLUMN level INTEGER DEFAULT 2",
      "UPDATE items SET level = CASE kind WHEN 'tf' THEN 1 WHEN 'mc' THEN 1 WHEN 'why' THEN 3 "
      "WHEN 'relate' THEN 3 ELSE 2 END"),
+    ("items", "explanation", "ALTER TABLE items ADD COLUMN explanation TEXT", None),
+    ("topics", "ai_generated", "ALTER TABLE topics ADD COLUMN ai_generated INTEGER DEFAULT 0", None),
+    ("items", "hidden", "ALTER TABLE items ADD COLUMN hidden INTEGER DEFAULT 0", None),
 ]
 
 

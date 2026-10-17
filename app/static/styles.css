@@ -447,3 +447,56 @@ dialog#pomo-dialog::backdrop { background: rgba(18, 23, 38, .55); }
   .tasks .task { flex-wrap: wrap; }
   .tasks .task .grow { flex-basis: calc(100% - 40px); }
 }
+
+
+/* ---------- conceptos y explicaciones ---------- */
+.concept { all: unset; cursor: pointer; border-bottom: 2px dotted var(--blue); color: inherit; border-radius: 2px; }
+.concept:hover { background: var(--blue-soft); }
+.concept:focus-visible { outline: 3px solid var(--blue); outline-offset: 1px; }
+dialog#concept-dialog { border: 0; border-radius: var(--r-md); padding: 0; width: min(620px, 94vw); max-height: 86vh; background: var(--panel); color: var(--ink); box-shadow: 0 20px 60px -20px rgba(0,0,0,.5); }
+dialog#concept-dialog::backdrop { background: rgba(18, 23, 38, .5); }
+.concept-box { padding: 24px 26px; }
+.concept-box h2 { font-size: 26px; }
+.explain { margin-top: 16px; }
+.explain h3 { font-size: 16px; margin: 14px 0 4px; color: var(--ink-2); }
+.explain p { max-width: 62ch; }
+.mentions { margin-top: 14px; }
+.mentions summary { cursor: pointer; font-weight: 700; color: var(--ink-2); }
+.mentions ul { padding-left: 18px; }
+.mentions li { margin: 8px 0; font-size: 15.5px; }
+.why-wrap { margin-top: 14px; }
+.why-box { margin-top: 8px; padding: 14px 16px; border-radius: var(--r-sm); background: var(--blue-soft); }
+.why-box h3 { font-size: 16px; margin-bottom: 4px; }
+.src-chip.off { opacity: .55; cursor: not-allowed; }
+.g-suggest { width: 100%; height: 64px; border: 0; margin-top: 8px; background: transparent; }
+
+.src-panel { margin-top: 14px; display: grid; gap: 8px; }
+.src-row { display: grid; grid-template-columns: 170px 1fr; gap: 10px; align-items: start; }
+.src-group-name { font-size: 14px; font-weight: 700; color: var(--ink-3); padding-top: 6px; }
+.src-row .src-chips { margin-top: 0; }
+@media (max-width: 860px) { .src-row { grid-template-columns: 1fr; gap: 4px; } }
+
+.result-item input { flex: none; }
+
+/* ---------- login ---------- */
+body.no-rail .rail { display: none; }
+body.no-rail .shell { grid-template-columns: 1fr; background: none; }
+.login { max-width: 420px; margin: 7vh auto 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 34px 32px; box-shadow: var(--shadow); }
+.login h1 { font-size: 30px; margin-top: 18px; }
+.login .lead { font-size: 16px; margin-bottom: 18px; }
+.login-brand { line-height: 1; }
+.login-brand .brand-word { display: block; font: 600 15px var(--font-body); color: var(--ink-2); margin-bottom: 4px; }
+.login .btn.big { width: 100%; }
+.login-error { color: var(--red); font-weight: 700; font-size: 15px; }
+.user-box { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--ink-2); font-size: 14.5px; }
+.user-box svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; flex: none; }
+.user-box b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-box .btn { padding: 4px 8px; font-size: 13.5px; }
+.user-box:not([hidden]) + .theme-toggle { margin-top: 0; }
+@media (max-width: 860px) { .user-box b { display: none; } .user-box { margin: 0; padding: 4px; } }
+
+.cat-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.cat-seg { flex-wrap: wrap; }
+.cat-seg button { padding: 7px 13px; }
+.src-details { margin-top: 12px; }
+.src-details summary { cursor: pointer; font-weight: 700; color: var(--ink-2); font-size: 15px; }
