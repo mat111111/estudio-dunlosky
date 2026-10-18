@@ -214,7 +214,8 @@ async function viewNotebook(params) {
     $("#nb-title").focus();
   }
 
-  $("#nb-new").addEventListener("click", () => create(topicFilter ? +topicFilter : null));
+  $("#nb-new").addEventListener("click", () => create(topicFilter ? +topicFilter : null).catch(e => toast("No se pudo crear la nota: " + e.message, true)));
+  const onRejection = ev => { if (location.hash.startsWith("#/notas")) { toast(String(ev.reason?.message || ev.reason), true); } };
   let qTimer;
   $("#nb-q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => { query = e.target.value.trim(); load(); }, 250); });
   $("#nb-topic").addEventListener("change", e => { topicFilter = e.target.value; load(); });
@@ -232,12 +233,23 @@ async function viewNotebook(params) {
   document.addEventListener("keydown", onKey);
   window.addEventListener("beforeunload", onUnload);
   cleanup = () => {
+    window.removeEventListener("unhandledrejection", onRejection);
     document.removeEventListener("keydown", onKey);
     window.removeEventListener("beforeunload", onUnload);
     if (current && dirty) saveNow();
   };
 
-  await load();
+  try {
+    await load();
+  } catch (e) {
+    // si el servidor es de una versión anterior (sin bloc de notas) se avisa qué hacer
+    const old = /not found/i.test(e.message);
+    main.innerHTML = `<div class="page narrow"><div class="empty"><h2>El bloc de notas no está disponible</h2>
+      <p class="muted">${old ? "El servidor todavía tiene la versión anterior de la app. En tu computadora, cerrá la app con <b>detener.bat</b> y volvé a abrirla con <b>iniciar.bat</b> (reconstruye la app). En Render, esperá a que termine el deploy del último <i>push</i>." : esc(e.message)}</p></div></div>`;
+    return;
+  }
+  // los botones "Nueva nota" no deben quedar sin respuesta si falla la creación
+  window.addEventListener("unhandledrejection", onRejection);
   if (params.get("id")) {
     try { await open(+params.get("id")); } catch (e) { drawEditor(); }
   } else if (params.get("tema")) {

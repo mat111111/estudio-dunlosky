@@ -169,6 +169,14 @@ class TestNuevasFunciones(unittest.TestCase):
             self.assertEqual(c.delete(f"/api/notebook/{n['id']}").json(), {"ok": True})
             self.assertEqual(c.get(f"/api/notebook/{n['id']}").status_code, 404)
 
+    def test_archivos_con_version(self):
+        # cada script lleva su versión: al actualizar la app el navegador no mezcla archivos viejos y nuevos
+        with TestClient(app) as c:
+            page = c.get("/").text
+            for f in ("app.js", "notes.js", "pomodoro.js", "styles.css"):
+                self.assertRegex(page, rf"/static/{f}\?v=[0-9a-f]{{8}}")
+            self.assertEqual(c.get("/static/app.js").headers["cache-control"], "no-cache")
+
     def test_videos_sin_clave(self):
         with TestClient(app) as c:
             tid = c.post("/api/topics", json={"title": "Fotosíntesis", "notes": {"title": "Fases", "text": MUESTRA}}).json()["id"]

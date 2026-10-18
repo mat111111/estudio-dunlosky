@@ -65,6 +65,14 @@ def _https(request: Request) -> bool:
 
 
 @app.middleware("http")
+async def static_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
 async def data_scope(request: Request, call_next):
     """Elige la base de datos de quien hace el pedido: la de su cuenta (o la del visitante)."""
     path = request.url.path
@@ -374,6 +382,7 @@ WEB_SITE = {"site": "web", "name": "Google (vía Gemini)", "about": "Páginas we
 WIKI_GROUP = "Enciclopedias y libros"
 SEARCH_KEYS = {"serper": ("serper_key", "SERPER_API_KEY"), "serpapi": ("serpapi_key", "SERPAPI_API_KEY"),
                "google": ("google_key", "GOOGLE_API_KEY"),  # YouTube Data API (y Google Libros, opcional)
+               "exa": ("exa_key", "EXA_API_KEY"),
                "tavily": ("tavily_key", "TAVILY_API_KEY"), "brave": ("brave_key", "BRAVE_API_KEY"),
                "openalex": ("openalex_key", "OPENALEX_API_KEY")}
 
@@ -383,6 +392,10 @@ def search_keys(con) -> dict:
     keys = {}
     for name, (setting, env) in SEARCH_KEYS.items():
         keys[name] = ((None if PUBLIC_MODE else db.get_setting(con, setting)) or os.environ.get(env) or "").strip() or None
+    # SearXNG solo por variable de entorno (la pone docker-compose): una dirección cargada desde la
+    # interfaz permitiría que el servidor consulte direcciones internas arbitrarias.
+    sx = os.environ.get("SEARXNG_URL", "").strip()
+    keys["searxng"] = sx if sx.startswith(("http://", "https://")) else None  # "no" o vacío: desactivado
     claude = ai_config(con, "anthropic")
     keys["anthropic"] = claude.key
     keys["anthropic_model"] = claude.model
@@ -414,9 +427,13 @@ def list_sources():
         kn = search_providers.key_name(k)
         key_label = {"serper": "Serper", "serpapi": "SerpApi"}.get(kn, v["name"])
         why = ("Configurá una clave de Claude en Ajustes" if v.get("needs") == "anthropic"
+               else "Se activa al iniciar la app con Docker (iniciar.bat levanta el buscador SearXNG)" if kn == "searxng"
                else f"Configurá la clave de {key_label} en Ajustes")
         out.append({"site": k, "name": v["name"], "about": v["about"], "lang": "es", "group": v["group"],
-                    "default": ok and k in ("tavily", "serper", "serpapi"), "available": ok, "why_off": why})
+                    "default": ok and k in ("searxng", "tavily", "serper", "serpapi"), "available": ok, "why_off": why})
+    order = ["Toda la web", "Google", WIKI_GROUP, "Programación", "Académicos", "Redes y sistemas", "Bases de datos",
+             "Matemática", "Ciencias", "Web"]
+    out.sort(key=lambda x: order.index(x["group"]) if x["group"] in order else len(order))  # orden estable
     return out
 
 
@@ -501,8 +518,9 @@ async def search(q: str, sites: str = "", lang: str | None = None, category: str
         g["group"] = WIKI_GROUP
     others = list(results[1:])
     # orden: web primero (más amplia), después enciclopedias, después el resto
-    web = [g for g in others if g.get("group") in ("Google", "Web")]
-    rest = [g for g in others if g.get("group") not in ("Google", "Web")]
+    first = ("Toda la web", "Google", "Web")
+    web = sorted([g for g in others if g.get("group") in first], key=lambda g: first.index(g["group"]))
+    rest = [g for g in others if g.get("group") not in first]
     res["groups"] = web + res["groups"] + rest
     # si en español no hubo nada, probamos en inglés
     if wiki and not any(g["results"] for g in res["groups"]) and "wikipedia_en" not in chosen:
@@ -1912,9 +1930,24 @@ def pomodoro_stats():
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _asset_version(name: str) -> str:
+    try:
+        return format(zlib.crc32((STATIC / name).read_bytes()), "08x")
+    except OSError:
+        return "0"
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    """index.html con un número de versión en cada script y hoja de estilos.
+
+    Así, cuando se actualiza la app, el navegador descarga sí o sí los archivos nuevos en vez de
+    mezclar un index.html nuevo con un app.js viejo guardado en caché (lo que hacía que, por ejemplo,
+    el Bloc de notas volviera al inicio).
+    """
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    page = re.sub(r'(/static/)([\w.-]+\.(?:js|css))"', lambda m: f'{m.group(1)}{m.group(2)}?v={_asset_version(m.group(2))}"', page)
+    return Response(page, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/health")

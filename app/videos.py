@@ -2,7 +2,8 @@
 
 Se prueba, en este orden, con lo que esté configurado:
   1. YouTube Data API v3 (clave de Google Cloud; 100 búsquedas gratis por día)
-  2. SerpApi (motor "youtube")
+  2. SearXNG (el metabuscador que levanta docker-compose; sin clave)
+  3. SerpApi (motor "youtube")
   3. Serper (búsqueda de videos de Google)
   4. Brave Search (búsqueda de videos)
   5. Tavily (limitado a youtube.com)
@@ -195,6 +196,28 @@ async def from_brave(q: str, key: str) -> list[dict]:
     return out
 
 
+def _length(value) -> int | None:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return parse_clock(str(value)) if value else None
+
+
+async def from_searxng(q: str, base: str) -> list[dict]:
+    async with _client(Accept="application/json") as cli:
+        r = await cli.get(base.rstrip("/") + "/search",
+                          params={"q": q, "format": "json", "categories": "videos", "language": "es", "safesearch": 1})
+    if r.status_code == 403:
+        raise SourceError("SearXNG no tiene habilitado el formato JSON.")
+    r.raise_for_status()
+    out = []
+    for it in r.json().get("results", []):
+        vid = video_id(it.get("url", ""))
+        if vid:
+            out.append(_video(vid, it.get("title", ""), it.get("author") or "", _length(it.get("length")),
+                              (it.get("publishedDate") or "")[:10], "", it.get("content", ""), it.get("thumbnail")))
+    return out
+
+
 async def from_tavily(q: str, key: str) -> list[dict]:
     async with _client(Authorization=f"Bearer {key}") as cli:
         r = await cli.post("https://api.tavily.com/search", json={
@@ -213,6 +236,7 @@ async def from_tavily(q: str, key: str) -> list[dict]:
 
 PROVIDERS = [
     ("google", "YouTube", from_youtube_api),
+    ("searxng", "SearXNG", from_searxng),
     ("serpapi", "SerpApi", from_serpapi),
     ("serper", "Serper", from_serper),
     ("brave", "Brave Search", from_brave),

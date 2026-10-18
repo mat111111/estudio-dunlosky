@@ -22,4 +22,20 @@ services:
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - OPENALEX_API_KEY=${OPENALEX_API_KEY:-}
+      - EXA_API_KEY=${EXA_API_KEY:-}
+      # buscador de toda la web (el servicio "buscador" de abajo)
+      - SEARXNG_URL=${SEARXNG_URL:-http://buscador:8080}
+    restart: unless-stopped
+
+  # SearXNG: metabuscador libre que consulta a la vez Google, Bing, DuckDuckGo, Brave, Qwant,
+  # Startpage, Wikipedia y muchos más, sin claves. Solo es accesible desde la app (no abre puertos).
+  buscador:
+    image: searxng/searxng:latest
+    container_name: estudio-dunlosky-buscador
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://buscador:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-estudio-dunlosky-clave-interna-del-buscador}
+      - SEARXNG_LIMITER=false
     restart: unless-stopped

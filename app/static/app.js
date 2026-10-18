@@ -1468,11 +1468,12 @@ async function viewSettings() {
       </div>
       <div class="panel" style="margin-top:16px">
         <h3>Buscadores con clave</h3>
-        <p class="small muted" style="margin-top:6px">Opcionales. Wikipedia, Wikilibros, Wikiversidad, Google Libros, arXiv, Europe PMC y Stack Overflow funcionan sin clave. «Google (vía Gemini)» usa tu clave de Gemini y «Web (vía Claude)», la de Claude. Con cualquiera de estas claves también se recomiendan videos de YouTube en cada tema.</p>
+        <p class="small muted" style="margin-top:6px">Opcionales. Sin ninguna clave ya se busca en toda la web con <b>SearXNG</b> (Google, Bing, DuckDuckGo, Brave, Qwant y más, cuando la app corre con Docker), Wikipedia, Wikilibros, Wikiversidad, Google Libros, Open Library, OpenAlex, Semantic Scholar, Crossref, DOAJ, arXiv, Europe PMC, MDN, Marginalia, Hacker News y 16 sitios de Stack Exchange. «Google (vía Gemini)» usa tu clave de Gemini y «Web (vía Claude)», la de Claude. Con cualquiera de estas claves también se recomiendan videos de YouTube en cada tema.</p>
         <form id="sk" class="stack" style="--gap:12px;margin-top:12px">
           ${[["google", "YouTube (clave de Google Cloud)", "AIza…", `Para recomendar videos en cada tema (100 búsquedas gratis por día). En <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">Google Cloud</a> activá la «YouTube Data API v3» y creá una clave en Credenciales. La clave de Gemini sirve solo si le habilitás también esa API.`],
              ["serper", "Serper: Google y Google Académico", "Clave de serper.dev", `Resultados de Google, Google Académico y videos. 2.500 búsquedas gratis al registrarte, sin tarjeta, en <a href="https://serper.dev" target="_blank" rel="noopener">serper.dev</a>.`],
              ["serpapi", "SerpApi: Google, Google Académico y YouTube", "Clave de serpapi.com", `250 búsquedas gratis por mes, sin tarjeta, en <a href="https://serpapi.com" target="_blank" rel="noopener">serpapi.com</a>.`],
+             ["exa", "Exa", "Clave de exa.ai", `Buscador web por significado: encuentra páginas que explican el tema aunque no usen tus mismas palabras. US$10 de crédito gratis por mes, sin tarjeta, en <a href="https://exa.ai" target="_blank" rel="noopener">exa.ai</a>.`],
              ["tavily", "Tavily", "tvly-…", `Buscador web para IA, 1.000 búsquedas gratis por mes sin tarjeta. Clave en <a href="https://app.tavily.com" target="_blank" rel="noopener">app.tavily.com</a>.`],
              ["brave", "Brave Search", "Clave de la API", `Buscador independiente. Clave en <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> (revisá allí sus planes vigentes).`],
              ["openalex", "OpenAlex (opcional)", "Clave gratuita", `Sin clave funciona con un límite diario bajo; con la clave gratuita de <a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org</a> el límite es 10 veces mayor.`]]
@@ -1499,7 +1500,7 @@ async function viewSettings() {
       e.preventDefault();
       const fd = new FormData(e.target);
       const keys = {};
-      for (const k of ["google", "serper", "serpapi", "tavily", "brave", "openalex"]) { const v = (fd.get(k) || "").trim(); if (v) keys[k] = v; }
+      for (const k of ["google", "serper", "serpapi", "exa", "tavily", "brave", "openalex"]) { const v = (fd.get(k) || "").trim(); if (v) keys[k] = v; }
       if (!Object.keys(keys).length) { toast("No escribiste ninguna clave nueva"); return; }
       await api("/api/settings", { method: "POST", body: { search_keys: keys } });
       toast("Claves guardadas");
@@ -1566,7 +1567,7 @@ async function renderVideos(body, t, refresh = false) {
       <p class="muted grow">${d.videos.length
         ? `Videos recomendados para comprender el tema${d.via ? ` (encontrados con ${esc(d.via)})` : ""}. Se descartan los Shorts y los de menos de 2 minutos y medio. Mirá uno y después ponete a prueba con preguntas: así el video suma de verdad.`
         : d.needs_key
-          ? `Para recomendar videos concretos hace falta una clave de búsqueda (en <a href="#/ajustes">Ajustes</a>): la de <b>YouTube</b> (gratis, 100 búsquedas por día) o la de Serper, SerpApi, Brave o Tavily si ya tenés alguna. Mientras tanto, podés buscar directo en YouTube.`
+          ? `Para recomendar videos concretos, iniciá la app con Docker (<b>iniciar.bat</b> levanta el buscador SearXNG, sin claves) o cargá en <a href="#/ajustes">Ajustes</a> la clave de <b>YouTube</b> (gratis, 100 búsquedas por día) o la de Serper, SerpApi, Brave o Tavily. Mientras tanto, podés buscar directo en YouTube.`
           : `No se encontraron videos.${d.errors.length ? " " + esc(d.errors.join(" ")) : ""}`}</p>
       <a class="btn" href="${safeHref(d.search_url)}" target="_blank" rel="noopener">Buscar en YouTube</a>
       ${d.providers.length ? `<button class="btn ghost" id="vid-refresh">Buscar otros</button>` : ""}

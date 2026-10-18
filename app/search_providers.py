@@ -1,7 +1,17 @@
 """Buscadores adicionales: académicos, de programación y de la web.
 
+Toda la web, sin clave:
+  - SearXNG: metabuscador que consulta a la vez Google, Bing, DuckDuckGo, Brave, Qwant, Startpage,
+    Mojeek, Wikipedia y muchos más. Corre en su propio contenedor (docker-compose) y la app le pregunta
+    por su API JSON. También tiene categorías de programación, ciencia y videos.
+  - Marginalia: buscador independiente de la "web pequeña" (blogs, apuntes personales, sitios sin publicidad)
+  - Hacker News: artículos de tecnología y programación
+  - MDN Web Docs: documentación de programación web, en español
+
 Sin clave:
   - OpenAlex: artículos académicos de todo el mundo (resumen y, si es de acceso abierto, texto)
+  - Semantic Scholar, Crossref y DOAJ: artículos académicos (resúmenes), DOAJ solo acceso abierto
+  - Open Library: libros con su descripción
   - arXiv: preprints de computación, matemática y física (resumen y versión HTML si existe)
   - Europe PMC: artículos de biología y salud (resumen)
   - Stack Overflow en español y en inglés: preguntas y respuestas de programación
@@ -36,10 +46,28 @@ TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 CONTACT = "estudio-dunlosky@example.org"  # OpenAlex pide un mail de contacto para su "polite pool"
 
 PROVIDERS: dict[str, dict] = {
+    "searxng": {"name": "Toda la web (SearXNG)", "group": "Toda la web",
+                "about": "Google, Bing, DuckDuckGo, Brave, Qwant, Startpage y más, a la vez", "keyname": "searxng",
+                "needs_env": "SEARXNG_URL"},
+    "searxng_it": {"name": "Programación en toda la web", "group": "Toda la web",
+                   "about": "GitHub, Stack Overflow, MDN, documentación y más (vía SearXNG)", "keyname": "searxng",
+                   "needs_env": "SEARXNG_URL"},
+    "searxng_science": {"name": "Ciencia en toda la web", "group": "Toda la web",
+                        "about": "Google Académico, arXiv, PubMed y más (vía SearXNG)", "keyname": "searxng",
+                        "needs_env": "SEARXNG_URL"},
+    "marginalia": {"name": "Marginalia", "group": "Toda la web", "about": "Buscador independiente: blogs y apuntes personales (en inglés)"},
+    "hackernews": {"name": "Hacker News", "group": "Toda la web", "about": "Artículos de tecnología y programación (en inglés)"},
+    "exa": {"name": "Exa", "group": "Toda la web", "about": "Buscador web por significado (US$10 gratis por mes)",
+            "key": "exa_key", "env": "EXA_API_KEY"},
+    "mdn": {"name": "MDN Web Docs", "group": "Programación", "about": "Documentación de HTML, CSS y JavaScript, en español"},
     "openalex": {"name": "OpenAlex", "group": "Académicos", "about": "Artículos académicos de todo el mundo",
                  "key": "openalex_key", "env": "OPENALEX_API_KEY", "key_optional": True},
     "arxiv": {"name": "arXiv", "group": "Académicos", "about": "Computación, matemática y física (preprints)"},
     "europepmc": {"name": "Europe PMC", "group": "Académicos", "about": "Biología, medicina y salud"},
+    "semanticscholar": {"name": "Semantic Scholar", "group": "Académicos", "about": "Artículos científicos de todas las áreas"},
+    "crossref": {"name": "Crossref", "group": "Académicos", "about": "Artículos de revistas de todo el mundo (con resumen)"},
+    "doaj": {"name": "DOAJ", "group": "Académicos", "about": "Revistas científicas de acceso abierto (mucho en español)"},
+    "openlibrary": {"name": "Open Library", "group": "Enciclopedias y libros", "about": "Libros con su descripción (Internet Archive)"},
     "so_es": {"name": "Stack Overflow en español", "group": "Programación", "about": "Preguntas y respuestas de programación"},
     "so_en": {"name": "Stack Overflow", "group": "Programación", "about": "La comunidad de programación más grande (en inglés)"},
     "se_net": {"name": "Network Engineering", "group": "Redes y sistemas", "about": "Redes: routing, switching, protocolos (en inglés)"},
@@ -48,6 +76,14 @@ PROVIDERS: dict[str, dict] = {
     "se_superuser": {"name": "Super User", "group": "Redes y sistemas", "about": "Computadoras, Windows y sistemas operativos (en inglés)"},
     "se_dba": {"name": "Database Administrators", "group": "Bases de datos", "about": "SQL, diseño y administración de bases de datos (en inglés)"},
     "se_math": {"name": "Mathematics Stack Exchange", "group": "Matemática", "about": "Preguntas y respuestas de matemática (en inglés)"},
+    "se_cs": {"name": "Computer Science", "group": "Programación", "about": "Algoritmos, complejidad y teoría de la computación (en inglés)"},
+    "se_softeng": {"name": "Software Engineering", "group": "Programación", "about": "Diseño, arquitectura y buenas prácticas (en inglés)"},
+    "se_codereview": {"name": "Code Review", "group": "Programación", "about": "Revisión de código con explicaciones (en inglés)"},
+    "se_security": {"name": "Information Security", "group": "Redes y sistemas", "about": "Seguridad informática (en inglés)"},
+    "se_electronics": {"name": "Electrical Engineering", "group": "Ciencias", "about": "Electrónica, circuitos y Arduino (en inglés)"},
+    "se_physics": {"name": "Physics", "group": "Ciencias", "about": "Preguntas y respuestas de física (en inglés)"},
+    "se_stats": {"name": "Cross Validated", "group": "Matemática", "about": "Estadística y probabilidad (en inglés)"},
+    "se_datascience": {"name": "Data Science", "group": "Programación", "about": "Ciencia de datos y aprendizaje automático (en inglés)"},
     "serper": {"name": "Google (Serper)", "group": "Google", "about": "Resultados de Google (2.500 búsquedas gratis al registrarte)",
                "key": "serper_key", "env": "SERPER_API_KEY"},
     "serper_scholar": {"name": "Google Académico (Serper)", "group": "Google",
@@ -67,7 +103,10 @@ PROVIDERS: dict[str, dict] = {
 }
 SO_SITES = {"so_es": "es.stackoverflow", "so_en": "stackoverflow", "se_net": "networkengineering",
             "se_serverfault": "serverfault", "se_unix": "unix", "se_superuser": "superuser", "se_dba": "dba",
-            "se_math": "math"}
+            "se_math": "math", "se_cs": "cs", "se_softeng": "softwareengineering", "se_codereview": "codereview",
+            "se_security": "security", "se_electronics": "electronics", "se_physics": "physics", "se_stats": "stats",
+            "se_datascience": "datascience"}
+SEARXNG_CATEGORY = {"searxng": "general", "searxng_it": "it", "searxng_science": "science"}
 
 
 def key_name(site: str) -> str | None:
@@ -103,24 +142,27 @@ def _result(site: str, title: str, url: str, snippet: str, words: int = 0, ref: 
 # --------------------------------------------------------------------------- #
 CATEGORIES: dict[str, dict] = {
     "programacion": {"label": "Programación", "hint": "programación",
-                     "sites": ["so_es", "so_en", "wikilibros", "wikipedia_es", "web", "serper", "serpapi", "tavily", "brave"]},
+                     "sites": ["searxng", "searxng_it", "so_es", "so_en", "mdn", "wikilibros", "wikipedia_es", "web", "serper", "serpapi",
+                               "exa", "tavily", "brave", "se_cs", "se_softeng", "hackernews"]},
     "redes": {"label": "Redes", "hint": "redes de computadoras", "arxiv": ["cs.NI"],
-              "sites": ["wikipedia_es", "wikilibros", "se_net", "se_serverfault", "web", "serper", "serpapi", "tavily", "brave",
-                        "arxiv", "google_books"]},
+              "sites": ["searxng", "searxng_it", "wikipedia_es", "wikilibros", "se_net", "se_serverfault", "se_security", "web",
+                        "serper", "serpapi", "exa", "tavily", "brave", "arxiv", "google_books"]},
     "matematica": {"label": "Matemática", "hint": "matemática",
-                   "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "se_math", "web", "serper", "serpapi", "tavily", "brave",
-                             "serper_scholar", "serpapi_scholar", "google_books"]},
+                   "sites": ["searxng", "searxng_science", "wikipedia_es", "wikilibros", "wikiversidad", "se_math", "se_stats", "web",
+                             "serper", "serpapi", "exa", "tavily", "brave", "serper_scholar", "serpapi_scholar", "google_books"]},
     "bases_datos": {"label": "Bases de datos", "hint": "bases de datos", "arxiv": ["cs.DB"],
-                    "sites": ["wikipedia_es", "wikilibros", "se_dba", "so_es", "web", "serper", "serpapi", "tavily", "brave"]},
+                    "sites": ["searxng", "searxng_it", "wikipedia_es", "wikilibros", "se_dba", "so_es", "web", "serper", "serpapi",
+                              "exa", "tavily", "brave"]},
     "sistemas_operativos": {"label": "Sistemas operativos", "hint": "sistemas operativos", "arxiv": ["cs.OS"],
-                            "sites": ["wikipedia_es", "wikilibros", "se_unix", "se_superuser", "web", "serper", "serpapi", "tavily",
-                                      "brave", "google_books"]},
+                            "sites": ["searxng", "searxng_it", "wikipedia_es", "wikilibros", "se_unix", "se_superuser", "web", "serper",
+                                      "serpapi", "exa", "tavily", "brave", "google_books"]},
     "ciencias": {"label": "Ciencias y salud", "hint": "",
-                 "sites": ["wikipedia_es", "wikiversidad", "openalex", "europepmc", "web", "serper", "serpapi",
-                           "serper_scholar", "serpapi_scholar", "tavily"]},
+                 "sites": ["searxng", "searxng_science", "wikipedia_es", "wikiversidad", "openalex", "semanticscholar", "doaj",
+                           "europepmc", "web", "serper", "serpapi", "serper_scholar", "serpapi_scholar", "exa", "tavily",
+                           "se_physics", "se_electronics"]},
     "otros": {"label": "Otros", "hint": "",
-              "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "web", "serper", "serpapi", "tavily", "brave",
-                       "openalex", "google_books"]},
+              "sites": ["searxng", "wikipedia_es", "wikilibros", "wikiversidad", "web", "serper", "serpapi", "exa", "tavily", "brave",
+                       "marginalia", "openalex", "doaj", "google_books", "openlibrary"]},
 }
 
 
@@ -481,6 +523,236 @@ async def fetch_google_books(ref: str, key: str | None = None) -> dict:
             "license": None, "sections": sections[:1] if len(sections[0]["text"].split()) > 80 else sections}
 
 
+# --------------------------------------------------------------------------- #
+# Toda la web: SearXNG (metabuscador propio), Marginalia, Hacker News, Exa
+# --------------------------------------------------------------------------- #
+async def search_searxng(q: str, base: str, category: str = "general") -> list[dict]:
+    site = {v: k for k, v in SEARXNG_CATEGORY.items()}[category]
+    async with _client(Accept="application/json") as cli:
+        r = await cli.get(base.rstrip("/") + "/search",
+                          params={"q": q, "format": "json", "language": "es", "categories": category, "safesearch": 1})
+    if r.status_code == 403:
+        raise SourceError("SearXNG no tiene habilitado el formato JSON (revisá searxng/settings.yml).")
+    r.raise_for_status()
+    out, seen = [], set()
+    for it in r.json().get("results", []):
+        url = it.get("url") or ""
+        if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        engines = it.get("engines") or ([it["engine"]] if it.get("engine") else [])
+        meta = "vía " + ", ".join(engines[:4]) if engines else ""
+        out.append(_result(site, _plain(it.get("title", "")), url, _plain(it.get("content", "")), meta=meta))
+        if len(out) >= 10:
+            break
+    return out
+
+
+async def search_marginalia(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get(f"https://api.marginalia.nu/public/search/{quote(q)}", params={"count": 8, "index": 0})
+    if r.status_code == 503:
+        raise SourceError("Marginalia está saturado (límite compartido); probá en un rato.")
+    r.raise_for_status()
+    return [_result("marginalia", it.get("title", ""), it.get("url", ""), it.get("description", ""))
+            for it in r.json().get("results", []) if it.get("url")]
+
+
+async def search_hackernews(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get("https://hn.algolia.com/api/v1/search",
+                          params={"query": q, "tags": "story", "hitsPerPage": 10})
+    r.raise_for_status()
+    out = []
+    for it in r.json().get("hits", []):
+        url = it.get("url")
+        if not url:
+            continue
+        meta = f"{it.get('points') or 0} puntos, {it.get('num_comments') or 0} comentarios, {(it.get('created_at') or '')[:4]}"
+        out.append(_result("hackernews", it.get("title", ""), url, "", meta=meta))
+    return out[:8]
+
+
+async def search_exa(q: str, key: str) -> list[dict]:
+    async with _client(**{"x-api-key": key, "Content-Type": "application/json"}) as cli:
+        r = await cli.post("https://api.exa.ai/search", json={
+            "query": q, "numResults": 8, "type": "auto", "contents": {"text": {"maxCharacters": 400}}})
+    if r.status_code in (401, 403):
+        raise SourceError("La clave de Exa no es válida.")
+    if r.status_code in (402, 429):
+        raise SourceError("Se terminaron los créditos de Exa de este mes.")
+    r.raise_for_status()
+    return [_result("exa", it.get("title") or "", it.get("url", ""), it.get("text") or it.get("summary") or "",
+                    meta=(it.get("publishedDate") or "")[:10]) for it in r.json().get("results", []) if it.get("url")]
+
+
+async def search_mdn(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get("https://developer.mozilla.org/api/v1/search", params={"q": q, "locale": "es", "size": 8})
+        data = r.json() if r.status_code < 400 else {}
+        if not data.get("documents"):
+            r = await cli.get("https://developer.mozilla.org/api/v1/search", params={"q": q, "locale": "en-US", "size": 8})
+            data = r.json() if r.status_code < 400 else {}
+    return [_result("mdn", d.get("title", ""), "https://developer.mozilla.org" + d["mdn_url"], d.get("summary", ""),
+                    meta="español" if d.get("locale", "").startswith("es") else "inglés")
+            for d in data.get("documents", []) if d.get("mdn_url", "").startswith("/")]
+
+
+# --------------------------------------------------------------------------- #
+# Académicos sin clave: Semantic Scholar, Crossref, DOAJ; libros: Open Library
+# --------------------------------------------------------------------------- #
+S2_FIELDS = "title,abstract,year,venue,citationCount,url,authors,openAccessPdf"
+
+
+async def search_semanticscholar(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get("https://api.semanticscholar.org/graph/v1/paper/search",
+                          params={"query": q, "limit": 8, "fields": S2_FIELDS})
+    if r.status_code == 429:
+        raise SourceError("Semantic Scholar está saturado (límite compartido); probá en un momento.")
+    r.raise_for_status()
+    out = []
+    for p in r.json().get("data") or []:
+        abstract = p.get("abstract") or ""
+        if not abstract:
+            continue
+        meta = ", ".join(x for x in (str(p.get("year") or ""), p.get("venue") or "",
+                                     f"{p['citationCount']} citas" if p.get("citationCount") else "") if x)
+        out.append(_result("semanticscholar", p.get("title", ""), p.get("url") or "", abstract, len(abstract.split()),
+                           p.get("paperId"), meta))
+    return out
+
+
+async def fetch_semanticscholar(ref: str) -> dict:
+    async with _client() as cli:
+        r = await cli.get(f"https://api.semanticscholar.org/graph/v1/paper/{quote(ref)}", params={"fields": S2_FIELDS})
+    if r.status_code >= 400:
+        raise SourceError("No se pudo descargar el artículo de Semantic Scholar.")
+    p = r.json()
+    if not p.get("abstract"):
+        raise SourceError("Ese artículo no tiene resumen disponible.")
+    authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+    return {"title": p.get("title") or "Artículo", "lang": "en", "url": p.get("url"), "revid": None, "timestamp": None,
+            "source_name": f"Semantic Scholar, {authors} ({p.get('year') or 's/f'})", "license": None,
+            "sections": [{"title": "Resumen", "text": p["abstract"]}]}
+
+
+def _jats(text: str) -> str:
+    """Los resúmenes de Crossref vienen en XML JATS."""
+    text = re.sub(r"<jats:title>.*?</jats:title>", "", text or "", flags=re.S)
+    return " ".join(_plain(text).split())
+
+
+async def search_crossref(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get("https://api.crossref.org/works", params={
+            "query": q, "rows": 8, "filter": "has-abstract:true", "mailto": CONTACT,
+            "select": "DOI,title,abstract,container-title,issued,author,URL,language"})
+    r.raise_for_status()
+    out = []
+    for it in (r.json().get("message") or {}).get("items", []):
+        abstract = _jats(it.get("abstract", ""))
+        title = (it.get("title") or [""])[0]
+        if not abstract or not title:
+            continue
+        year = (((it.get("issued") or {}).get("date-parts") or [[None]])[0] or [None])[0]
+        meta = ", ".join(x for x in (str(year or ""), (it.get("container-title") or [""])[0]) if x)
+        out.append(_result("crossref", _plain(title), it.get("URL") or f"https://doi.org/{it['DOI']}", abstract,
+                           len(abstract.split()), it.get("DOI"), meta))
+    return out
+
+
+async def fetch_crossref(ref: str) -> dict:
+    async with _client() as cli:
+        r = await cli.get(f"https://api.crossref.org/works/{quote(ref, safe='/')}", params={"mailto": CONTACT})
+    if r.status_code >= 400:
+        raise SourceError("No se pudo descargar el artículo de Crossref.")
+    it = r.json().get("message") or {}
+    abstract = _jats(it.get("abstract", ""))
+    if len(abstract.split()) < 30:
+        raise SourceError("Ese artículo no tiene un resumen suficiente para estudiar.")
+    authors = ", ".join(f"{a.get('given', '')} {a.get('family', '')}".strip() for a in (it.get("author") or [])[:3])
+    year = (((it.get("issued") or {}).get("date-parts") or [[None]])[0] or [None])[0]
+    return {"title": _plain((it.get("title") or ["Artículo"])[0]), "lang": it.get("language") or "es",
+            "url": it.get("URL") or f"https://doi.org/{ref}", "revid": None, "timestamp": None,
+            "source_name": f"Crossref, {authors} ({year or 's/f'})", "license": None,
+            "sections": [{"title": "Resumen", "text": abstract}]}
+
+
+async def search_doaj(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get(f"https://doaj.org/api/search/articles/{quote(q)}", params={"pageSize": 8, "page": 1})
+    r.raise_for_status()
+    out = []
+    for it in r.json().get("results", []):
+        b = it.get("bibjson") or {}
+        abstract = _plain(b.get("abstract") or "")
+        if len(abstract.split()) < 25:
+            continue
+        link = next((ln.get("url") for ln in b.get("link") or [] if ln.get("url")), f"https://doaj.org/article/{it.get('id')}")
+        meta = ", ".join(x for x in (str(b.get("year") or ""), (b.get("journal") or {}).get("title") or "") if x)
+        out.append(_result("doaj", _plain(b.get("title", "")), link, abstract, len(abstract.split()), it.get("id"), meta))
+    return out
+
+
+async def fetch_doaj(ref: str) -> dict:
+    async with _client() as cli:
+        r = await cli.get(f"https://doaj.org/api/articles/{quote(ref)}")
+    if r.status_code >= 400:
+        raise SourceError("No se pudo descargar el artículo de DOAJ.")
+    b = r.json().get("bibjson") or {}
+    abstract = _plain(b.get("abstract") or "")
+    link = next((ln.get("url") for ln in b.get("link") or [] if ln.get("url")), f"https://doaj.org/article/{ref}")
+    sections = [{"title": "Resumen", "text": abstract}] if abstract else []
+    try:  # los artículos de acceso abierto suelen tener el texto completo en la web de la revista
+        if link and not link.lower().endswith(".pdf"):
+            full = await sources.fetch_url(link)
+            sections += full["sections"][:20]
+    except SourceError:
+        pass
+    if not sections:
+        raise SourceError("Ese artículo no tiene resumen disponible.")
+    authors = ", ".join(a.get("name", "") for a in (b.get("author") or [])[:3])
+    return {"title": _plain(b.get("title") or "Artículo"), "lang": "es", "url": link, "revid": None, "timestamp": None,
+            "source_name": f"DOAJ, {authors} ({b.get('year') or 's/f'})", "license": "Acceso abierto", "sections": sections}
+
+
+async def search_openlibrary(q: str) -> list[dict]:
+    async with _client() as cli:
+        r = await cli.get("https://openlibrary.org/search.json", params={
+            "q": q, "limit": 10, "fields": "key,title,author_name,first_publish_year,subject"})
+    r.raise_for_status()
+    out = []
+    for d in r.json().get("docs", []):
+        if not d.get("key", "").startswith("/works/"):
+            continue
+        meta = ", ".join(x for x in (", ".join((d.get("author_name") or [])[:2]), str(d.get("first_publish_year") or "")) if x)
+        snippet = "Temas: " + ", ".join((d.get("subject") or [])[:8]) if d.get("subject") else ""
+        out.append(_result("openlibrary", d.get("title", ""), f"https://openlibrary.org{d['key']}", snippet,
+                           ref=d["key"], meta=meta))
+    return out[:8]
+
+
+async def fetch_openlibrary(ref: str) -> dict:
+    if not re.fullmatch(r"/works/OL\d+W", ref or ""):
+        raise SourceError("Referencia de Open Library no válida.")
+    async with _client() as cli:
+        r = await cli.get(f"https://openlibrary.org{ref}.json")
+    if r.status_code >= 400:
+        raise SourceError("No se pudo abrir ese libro en Open Library.")
+    w = r.json()
+    desc = w.get("description")
+    desc = desc.get("value") if isinstance(desc, dict) else (desc or "")
+    desc = re.sub(r"\(\[source\]\[\d+\]\)|\[\d+\]:.*$", "", desc, flags=re.M).strip()
+    if len(desc.split()) < 40:
+        raise SourceError("Ese libro no tiene una descripción suficiente para estudiar.")
+    sections = [{"title": "De qué trata el libro", "text": desc}]
+    if w.get("subjects"):
+        sections.append({"title": "Temas", "text": "El libro trata sobre " + ", ".join(w["subjects"][:12]) + "."})
+    return {"title": w.get("title") or "Libro", "lang": "es", "url": f"https://openlibrary.org{ref}", "revid": None,
+            "timestamp": None, "source_name": "Open Library", "license": None, "sections": sections}
+
+
 async def search_claude_web(q: str, key: str, model: str) -> list[dict]:
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     body = {"model": model, "max_tokens": 1024,
@@ -508,6 +780,24 @@ async def search_claude_web(q: str, key: str, model: str) -> list[dict]:
 async def search(site: str, q: str, keys: dict, hint: str = "", arxiv_cats: list[str] | None = None) -> list[dict]:
     """Busca en un proveedor. `hint` agrega contexto de la categoría a los buscadores web generales."""
     web_q = f"{q} {hint}".strip() if hint and hint.lower() not in q.lower() else q
+    if site in SEARXNG_CATEGORY:
+        return await search_searxng(web_q if site == "searxng" else q, keys["searxng"], SEARXNG_CATEGORY[site])
+    if site == "marginalia":
+        return await search_marginalia(q)
+    if site == "hackernews":
+        return await search_hackernews(q)
+    if site == "exa":
+        return await search_exa(web_q, keys["exa"])
+    if site == "mdn":
+        return await search_mdn(q)
+    if site == "semanticscholar":
+        return await search_semanticscholar(q)
+    if site == "crossref":
+        return await search_crossref(q)
+    if site == "doaj":
+        return await search_doaj(q)
+    if site == "openlibrary":
+        return await search_openlibrary(q)
     if site == "openalex":
         return await search_openalex(q, keys.get("openalex"))
     if site == "arxiv":
@@ -544,6 +834,14 @@ async def fetch(site: str, ref: str | None, url: str | None, keys: dict) -> dict
             return await fetch_stackoverflow(ref, site)
         if site == "google_books" and ref:
             return await fetch_google_books(ref, keys.get("google"))
+        if site == "semanticscholar" and ref:
+            return await fetch_semanticscholar(ref)
+        if site == "crossref" and ref:
+            return await fetch_crossref(ref)
+        if site == "doaj" and ref:
+            return await fetch_doaj(ref)
+        if site == "openlibrary" and ref:
+            return await fetch_openlibrary(ref)
     except httpx.HTTPError as e:
         raise SourceError(f"No se pudo descargar de {PROVIDERS[site]['name']} ({type(e).__name__}).") from e
     if url:

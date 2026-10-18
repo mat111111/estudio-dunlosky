@@ -71,7 +71,7 @@ Atajos de teclado en la práctica: `1`–`4` eligen una opción, `Enter` pasa a 
 ### Videos de YouTube recomendados
 En cada tema, la pestaña **Videos** muestra videos que explican el tema (se descartan los Shorts y los de menos de 2 minutos y medio), más enlaces para buscar en YouTube cada parte del tema. La ficha de cada concepto («¿por qué?») tiene un botón **Ver videos en YouTube** y, al buscar un tema nuevo, aparece el enlace a los videos sobre esa búsqueda. Los videos encontrados también se incluyen en el **apunte en PDF**, con su enlace.
 
-Para recomendar videos concretos hace falta alguna de estas claves (en **Ajustes → Buscadores con clave**); se usa la primera que esté cargada:
+Con Docker no hace falta ninguna clave: los videos se buscan con el metabuscador **SearXNG** que se levanta junto con la app. Si querés resultados de la API oficial de YouTube, o usás la app sin Docker, se puede cargar alguna de estas claves (en **Ajustes → Buscadores con clave**); se usa la primera disponible:
 1. **YouTube Data API v3** (gratis, 100 búsquedas por día): en https://console.cloud.google.com/apis/library/youtube.googleapis.com activá la API y creá una clave en *Credenciales*. La clave de Gemini sirve solo si le habilitás también esa API.
 2. **SerpApi**, **Serper**, **Brave Search** o **Tavily**, si ya tenés alguna.
 
@@ -156,14 +156,27 @@ Con las claves de Serper o SerpApi, cada área suma también **Google** (y Matem
 
 En los buscadores web (Google, Tavily, Brave) el área se agrega como contexto a la búsqueda, para que «árbol» en Programación traiga estructuras de datos y no botánica.
 
+### Buscar en toda la web (sin claves)
+Al iniciar con Docker (`iniciar.bat` o `docker compose up -d --build`) se levanta también **SearXNG**, un metabuscador libre que corre en tu computadora y consulta **a la vez Google, Bing, DuckDuckGo, Brave, Qwant, Startpage, Mojeek, Wikipedia y muchos más**, sin claves ni cuentas. En el buscador aparece como:
+- **Toda la web (SearXNG)**: búsqueda general; cada resultado indica en qué buscadores apareció.
+- **Programación en toda la web**: GitHub, Stack Overflow, documentación técnica y más.
+- **Ciencia en toda la web**: Google Académico, arXiv, PubMed y más.
+
+También recomienda **videos de YouTube** en cada tema sin necesidad de clave. SearXNG solo es accesible desde la app (no abre ningún puerto en tu red). Su configuración está en `searxng/settings.yml`; si algún buscador interno deja de responder por un rato (Google a veces corta las consultas automáticas), los demás siguen funcionando.
+
+> En Render (plan gratuito) no corre SearXNG porque es un segundo servicio. Ahí se puede usar la variable `SEARXNG_URL` apuntando a una instancia propia de SearXNG con formato JSON activado.
+
+Otras fuentes de toda la web: **Marginalia** (buscador independiente de blogs y apuntes personales), **Hacker News** (artículos de tecnología) y, con clave, **Exa** (búsqueda por significado, US$10 de crédito gratis por mes).
+
 ### Fuentes
 
 - **Fuentes integradas** (se buscan todas a la vez, con su API oficial y licencia libre):
   - **Wikipedia** en español e inglés, y **Simple English Wikipedia** (explicaciones más sencillas);
   - **Wikilibros** y **Wikibooks**: libros de texto y manuales escritos de forma colaborativa;
   - **Wikiversidad**: cursos y material didáctico.
-- **Académicos (sin clave)**: **OpenAlex** (artículos de todo el mundo: resumen y, si es de acceso abierto, el texto), **arXiv** (computación, matemática y física: resumen y versión HTML cuando existe) y **Europe PMC** (biología y salud: resumen).
-- **Programación (sin clave)**: **Stack Overflow en español** y **Stack Overflow**: se importa la pregunta con sus respuestas más votadas (licencia CC BY-SA).
+- **Académicos (sin clave)**: **OpenAlex** (artículos de todo el mundo: resumen y, si es de acceso abierto, el texto), **Semantic Scholar**, **Crossref**, **DOAJ** (revistas de acceso abierto, con mucho material en español; si la revista publica el texto en la web, se importa completo), **arXiv** (computación, matemática y física: resumen y versión HTML cuando existe) y **Europe PMC** (biología y salud: resumen).
+- **Libros (sin clave)**: **Google Libros** y **Open Library** (Internet Archive): se importa la descripción del libro.
+- **Programación (sin clave)**: **MDN Web Docs** (documentación web en español), **Stack Overflow en español**, **Stack Overflow** y otros sitios de Stack Exchange: Computer Science, Software Engineering, Code Review, Data Science, Network Engineering, Server Fault, Unix & Linux, Super User, Information Security, Database Administrators, Mathematics, Cross Validated (estadística), Electrical Engineering y Physics. Se importa la pregunta con sus respuestas más votadas (licencia CC BY-SA).
 - **Google** (grupo propio en el buscador):
   - **Google (vía Gemini)**: si configuraste una clave de Gemini (ver abajo).
   - **Google (Serper)** y **Google Académico (Serper)**: clave gratuita de https://serper.dev (2.500 búsquedas al registrarte, sin tarjeta).
@@ -292,7 +305,7 @@ estudio-dunlosky/
 │   ├── auth.py        Cuentas, contraseñas (scrypt), sesiones y límite de intentos
 │   ├── sources.py     Wikis (búsqueda y descarga), páginas web por URL y apuntes propios
 │   ├── search_providers.py  OpenAlex, arXiv, Europe PMC, Stack Exchange, Google (Serper, SerpApi, Libros), Tavily, Brave y áreas
-│   ├── videos.py      Videos de YouTube recomendados (YouTube Data API, SerpApi, Serper, Brave, Tavily)
+│   ├── videos.py      Videos de YouTube recomendados (YouTube Data API, SearXNG, SerpApi, Serper, Brave, Tavily)
 │   ├── export_pdf.py  Apunte y cuestionarios en PDF
 │   ├── textproc.py    Oraciones, normalización, palabras y oraciones clave
 │   ├── generator.py   Generación de preguntas ancladas a la fuente
@@ -303,6 +316,7 @@ estudio-dunlosky/
 │   └── static/        Interfaz sin frameworks: index.html, styles.css, app.js,
 │                      pomodoro.js (temporizador y sonidos), tasks.js (tareas), concepts.js (fichas «¿por qué?»)
 │                      y notes.js (bloc de notas y nota rápida)
+├── searxng/           Configuración del buscador de toda la web (SearXNG)
 ├── tests/             Pruebas automáticas (no necesitan internet)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -328,6 +342,7 @@ python -m unittest discover tests
 - **“Docker Desktop no está abierto”**: abrilo desde el menú Inicio y esperá a que termine de arrancar.
 - **“No se pudo conectar con Wikipedia”**: la app necesita internet para buscar y descargar artículos. Una vez creado el tema, se puede estudiar sin conexión.
 - **No abre en el navegador**: entrá a mano a http://localhost:8000. Si sigue sin abrir, ejecutá `docker compose logs` en la carpeta del proyecto para ver el error.
+- **El Bloc de notas volvía al inicio o no aparecía el botón de nota rápida**: el navegador mezclaba archivos nuevos con otros viejos guardados en caché después de actualizar. Desde esta versión cada archivo lleva su número de versión y se descarga siempre el correcto. Si te pasa con la versión anterior, recargá con `Ctrl + F5`.
 - **El pomodoro quedaba en 00:01 o decía que ya estaba iniciado**: corregido en esta versión. Si el navegador había guardado un estado trabado, se limpia solo al abrir la app.
 - **Pide iniciar sesión otra vez**: la sesión dura 30 días; también se cierra al cambiar la contraseña. En Render gratis, cada reinicio borra las cuentas (ver más arriba).
 - **«Demasiados intentos fallidos»**: esperá 15 minutos o cambiá la contraseña desde la terminal (sección *Cuentas*).

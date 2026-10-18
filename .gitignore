@@ -6,3 +6,6 @@ data/
 .venv/
 __pycache__/
 *.pyc
+# archivos que genera el buscador SearXNG (solo se versiona su configuración)
+searxng/*
+!searxng/settings.yml

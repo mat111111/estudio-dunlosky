@@ -71,6 +71,56 @@ def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"items": [{"question_id": 77, "title": "¿Qué es un puntero en C++?", "link": "https://es.stackoverflow.com/q/77",
                                                     "score": 15, "answer_count": 3, "is_answered": True,
                                                     "body": "<p>No entiendo qué es un puntero en C++.</p>"}]})
+    if host == "buscador":
+        params = dict(request.url.params)
+        assert params["format"] == "json"
+        if params["categories"] == "videos":
+            return httpx.Response(200, json={"results": [
+                {"url": "https://www.youtube.com/watch?v=sxsxsxsxsx1", "title": "Modelo OSI explicado", "author": "Redes 101",
+                 "length": "0:15:20", "thumbnail": "https://i.ytimg.com/vi/sxsxsxsxsx1/hqdefault.jpg", "content": "Las 7 capas"},
+                {"url": "https://www.youtube.com/watch?v=sxsxsxsxsx2", "title": "Corto", "length": 60},
+                {"url": "https://www.dailymotion.com/video/x1", "title": "Otro sitio"}]})
+        return httpx.Response(200, json={"results": [
+            {"url": "https://ejemplo.edu/osi", "title": "El modelo OSI", "content": "Siete capas...", "engines": ["google", "bing", "duckduckgo"]},
+            {"url": "https://ejemplo.edu/osi", "title": "Duplicado", "content": "", "engines": ["brave"]},
+            {"url": "javascript:alert(1)", "title": "Malicioso", "content": ""}]})
+    if host == "api.marginalia.nu":
+        assert "/public/search/" in url
+        return httpx.Response(200, json={"query": "x", "results": [{"url": "https://blog.ej/rr", "title": "Round robin notes", "description": "My notes"}]})
+    if host == "hn.algolia.com":
+        return httpx.Response(200, json={"hits": [{"title": "How TCP works", "url": "https://ej.com/tcp", "points": 300, "num_comments": 80, "created_at": "2021-01-01T00:00:00Z"},
+                                                  {"title": "Ask HN", "url": None}]})
+    if host == "api.exa.ai":
+        assert request.headers["x-api-key"] == "exa-test"
+        return httpx.Response(200, json={"results": [{"title": "Guía de punteros", "url": "https://ej.com/p", "text": "Un puntero...", "publishedDate": "2023-02-01T00:00:00Z"}]})
+    if host == "developer.mozilla.org":
+        return httpx.Response(200, json={"documents": [{"mdn_url": "/es/docs/Web/JavaScript/Closures", "title": "Closures", "summary": "Una clausura es...", "locale": "es"}]})
+    if host == "api.semanticscholar.org":
+        paper = {"paperId": "abc123", "title": "Sleep and memory", "abstract": ABSTRACT, "year": 2020, "venue": "Neuro",
+                 "citationCount": 50, "url": "https://www.semanticscholar.org/paper/abc123", "authors": [{"name": "J. Doe"}]}
+        if "/paper/search" in url:
+            return httpx.Response(200, json={"data": [paper, {**paper, "paperId": "noabs", "abstract": None}]})
+        return httpx.Response(200, json=paper)
+    if host == "api.crossref.org":
+        item = {"DOI": "10.1/xyz", "title": ["Fotosíntesis en maíz"], "abstract": "<jats:title>Resumen</jats:title><jats:p>" + ABSTRACT + "</jats:p>",
+                "container-title": ["Revista Agro"], "issued": {"date-parts": [[2019, 5]]}, "URL": "https://doi.org/10.1/xyz",
+                "author": [{"given": "Ana", "family": "Pérez"}]}
+        if "/works/10.1/xyz" in url:
+            return httpx.Response(200, json={"message": item})
+        return httpx.Response(200, json={"message": {"items": [item]}})
+    if host == "doaj.org":
+        art = {"id": "d1", "bibjson": {"title": "Aprendizaje espaciado", "abstract": ABSTRACT, "year": "2022",
+                                       "journal": {"title": "Revista Educación"}, "link": [{"type": "fulltext", "url": "https://revista.edu/a.pdf"}],
+                                       "author": [{"name": "Luis Gómez"}]}}
+        if "/api/articles/d1" in url:
+            return httpx.Response(200, json=art)
+        return httpx.Response(200, json={"results": [art]})
+    if host == "openlibrary.org":
+        if url.endswith("/works/OL123W.json"):
+            return httpx.Response(200, json={"title": "Estructuras de datos", "description": {"type": "/type/text", "value": ABSTRACT + " " + ABSTRACT},
+                                             "subjects": ["Algoritmos", "Programación"]})
+        return httpx.Response(200, json={"docs": [{"key": "/works/OL123W", "title": "Estructuras de datos", "author_name": ["N. Wirth"],
+                                                   "first_publish_year": 1976, "subject": ["Algoritmos"]}]})
     if host == "google.serper.dev":
         assert request.headers["X-API-KEY"] == "serper-test"
         body = json.loads(request.content)
@@ -258,6 +308,39 @@ class FakeClients(unittest.TestCase):
         self.assertEqual(none["videos"], [])
         self.assertIsNone(videos.video_id("https://www.youtube.com/shorts/abcdefghijk"))
         self.assertEqual(videos.parse_iso_duration("PT1H2M3S"), 3723)
+
+    def test_toda_la_web_y_academicos(self):
+        sx = self.run_(sp.search("searxng", "modelo osi", {"searxng": "http://buscador:8080"}, hint="redes"))
+        self.assertEqual([r["url"] for r in sx], ["https://ejemplo.edu/osi"])  # sin duplicados ni javascript:
+        self.assertIn("google", sx[0]["meta"])
+        self.assertEqual(self.run_(sp.search("searxng_it", "osi", {"searxng": "http://buscador:8080"}))[0]["site"], "searxng_it")
+        self.assertEqual(self.run_(sp.search("marginalia", "round robin", {}))[0]["url"], "https://blog.ej/rr")
+        hn = self.run_(sp.search("hackernews", "tcp", {}))
+        self.assertEqual(len(hn), 1)
+        self.assertEqual(self.run_(sp.search("exa", "punteros", {"exa": "exa-test"}))[0]["meta"], "2023-02-01")
+        self.assertEqual(self.run_(sp.search("mdn", "closures", {}))[0]["url"],
+                         "https://developer.mozilla.org/es/docs/Web/JavaScript/Closures")
+        s2 = self.run_(sp.search("semanticscholar", "sleep", {}))
+        self.assertEqual([r["ref"] for r in s2], ["abc123"])
+        self.assertIn("J. Doe", self.run_(sp.fetch("semanticscholar", "abc123", None, {}))["source_name"])
+        cr = self.run_(sp.search("crossref", "fotosíntesis", {}))
+        self.assertNotIn("<jats", cr[0]["snippet"])
+        self.assertNotIn("Resumen", cr[0]["snippet"][:10])
+        self.assertIn("Ana Pérez", self.run_(sp.fetch("crossref", "10.1/xyz", None, {}))["source_name"])
+        dj = self.run_(sp.search("doaj", "espaciado", {}))
+        self.assertEqual(dj[0]["ref"], "d1")
+        self.assertEqual(self.run_(sp.fetch("doaj", "d1", None, {}))["sections"][0]["title"], "Resumen")
+        ol = self.run_(sp.search("openlibrary", "estructuras", {}))
+        self.assertEqual(ol[0]["ref"], "/works/OL123W")
+        self.assertEqual(len(self.run_(sp.fetch("openlibrary", "/works/OL123W", None, {}))["sections"]), 2)
+        with self.assertRaises(sources.SourceError):
+            self.run_(sp.fetch("openlibrary", "/../../etc", None, {}))
+
+    def test_videos_searxng_sin_clave(self):
+        v = self.run_(videos.find("modelo osi", {"searxng": "http://buscador:8080"}))
+        self.assertEqual(v["via"], "SearXNG")
+        self.assertEqual([x["id"] for x in v["videos"]], ["sxsxsxsxsx1"])
+        self.assertEqual(v["videos"][0]["duration"], "15:20")
 
 
 if __name__ == "__main__":
