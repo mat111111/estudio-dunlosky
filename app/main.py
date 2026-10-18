@@ -1632,6 +1632,307 @@ def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen"
 
 
 # --------------------------------------------------------------------------- #
+# Mapas conceptuales
+# --------------------------------------------------------------------------- #
+MAP_SHAPES = {"rect", "round", "ellipse", "circle", "diamond", "note", "text"}
+
+
+class MapIn(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    topic_id: int | None = None
+    data: dict | None = None
+
+
+def _clean_map(data: dict) -> dict:
+    """Valida el contenido del mapa (solo datos simples; el texto se escapa al dibujarlo)."""
+    if len(json.dumps(data)) > 600_000:
+        raise HTTPException(400, "El mapa es demasiado grande.")
+    nodes, edges = data.get("nodes") or [], data.get("edges") or []
+    if not isinstance(nodes, list) or not isinstance(edges, list) or len(nodes) > 400 or len(edges) > 800:
+        raise HTTPException(400, "Mapa inválido.")
+    num = lambda v, d=0: float(v) if isinstance(v, (int, float)) and abs(v) < 1e6 else d  # noqa: E731
+    color = lambda v: v if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v) else None  # noqa: E731
+    ids = set()
+    out_nodes = []
+    for n in nodes:
+        if not isinstance(n, dict) or not isinstance(n.get("id"), str) or len(n["id"]) > 40:
+            continue
+        ids.add(n["id"])
+        out_nodes.append({"id": n["id"], "x": num(n.get("x")), "y": num(n.get("y")),
+                          "w": max(20.0, min(num(n.get("w"), 160), 2000)), "h": max(20.0, min(num(n.get("h"), 60), 2000)),
+                          "shape": n.get("shape") if n.get("shape") in MAP_SHAPES else "round",
+                          "text": str(n.get("text") or "")[:500], "fill": color(n.get("fill")), "stroke": color(n.get("stroke")),
+                          "bold": bool(n.get("bold")), "size": max(10, min(int(num(n.get("size"), 16)), 48))})
+    out_edges = []
+    for e in edges:
+        if not isinstance(e, dict) or e.get("from") not in ids or e.get("to") not in ids or not isinstance(e.get("id"), str):
+            continue
+        out_edges.append({"id": e["id"][:40], "from": e["from"], "to": e["to"], "label": str(e.get("label") or "")[:120],
+                          "arrow": e.get("arrow") if e.get("arrow") in ("end", "both", "none") else "end",
+                          "dash": bool(e.get("dash")), "stroke": color(e.get("stroke"))})
+    view = data.get("view") if isinstance(data.get("view"), dict) else {}
+    return {"nodes": out_nodes, "edges": out_edges,
+            "view": {"x": num(view.get("x")), "y": num(view.get("y")), "zoom": max(0.1, min(num(view.get("zoom"), 1), 4))}}
+
+
+def _map_row(con, map_id: int) -> dict:
+    r = db.row(con.execute("SELECT m.*, t.title AS topic_title FROM concept_maps m LEFT JOIN topics t ON t.id = m.topic_id "
+                           "WHERE m.id = ?", (map_id,)).fetchone())
+    if not r:
+        raise HTTPException(404, "Mapa no encontrado")
+    r["data"] = json.loads(r["data"] or "{}")
+    return r
+
+
+@app.get("/api/maps")
+def list_maps():
+    with db.tx() as con:
+        rows = db.rows(con.execute("SELECT m.id, m.title, m.topic_id, m.data, m.updated_at, t.title AS topic_title "
+                                   "FROM concept_maps m LEFT JOIN topics t ON t.id = m.topic_id ORDER BY m.updated_at DESC"))
+    for r in rows:
+        d = json.loads(r.pop("data") or "{}")
+        r["nodes"] = len(d.get("nodes", []))
+        r["edges"] = len(d.get("edges", []))
+    return rows
+
+
+@app.get("/api/maps/{map_id}")
+def get_map(map_id: int):
+    with db.tx() as con:
+        return _map_row(con, map_id)
+
+
+@app.post("/api/maps")
+def create_map(body: MapIn):
+    with db.tx() as con:
+        if body.topic_id and not con.execute("SELECT 1 FROM topics WHERE id=?", (body.topic_id,)).fetchone():
+            raise HTTPException(400, "Ese tema no existe.")
+        data = _clean_map(body.data or {})
+        now = now_iso()
+        cur = con.execute("INSERT INTO concept_maps(title, topic_id, data, created_at, updated_at) VALUES(?,?,?,?,?)",
+                          ((body.title or "Mapa conceptual").strip() or "Mapa conceptual", body.topic_id or None,
+                           json.dumps(data, ensure_ascii=False), now, now))
+        return _map_row(con, cur.lastrowid)
+
+
+@app.put("/api/maps/{map_id}")
+def update_map(map_id: int, body: MapIn):
+    with db.tx() as con:
+        _map_row(con, map_id)
+        if body.title is not None:
+            con.execute("UPDATE concept_maps SET title=? WHERE id=?", (body.title.strip() or "Mapa conceptual", map_id))
+        if body.topic_id is not None:
+            if body.topic_id and not con.execute("SELECT 1 FROM topics WHERE id=?", (body.topic_id,)).fetchone():
+                raise HTTPException(400, "Ese tema no existe.")
+            con.execute("UPDATE concept_maps SET topic_id=? WHERE id=?", (body.topic_id or None, map_id))
+        if body.data is not None:
+            con.execute("UPDATE concept_maps SET data=? WHERE id=?", (json.dumps(_clean_map(body.data), ensure_ascii=False), map_id))
+        con.execute("UPDATE concept_maps SET updated_at=? WHERE id=?", (now_iso(), map_id))
+        r = _map_row(con, map_id)
+    return {"id": r["id"], "title": r["title"], "topic_id": r["topic_id"], "topic_title": r["topic_title"],
+            "updated_at": r["updated_at"]}
+
+
+@app.delete("/api/maps/{map_id}")
+def delete_map(map_id: int):
+    with db.tx() as con:
+        _map_row(con, map_id)
+        con.execute("DELETE FROM concept_maps WHERE id=?", (map_id,))
+    return {"ok": True}
+
+
+LINK_VERBS = {"es", "son", "fue", "fueron", "era", "eran", "tiene", "tienen", "hay", "forma", "forman", "incluye", "incluyen",
+              "produce", "producen", "ocurre", "ocurren", "usa", "usan", "utiliza", "permite", "permiten", "depende", "dependen",
+              "contiene", "contienen", "genera", "generan", "necesita", "necesitan", "realiza", "realizan", "se"}
+VERB_END = re.compile(r"(?:a|e|an|en|ó|ió|aron|ieron|aba|aban|ía|ían|ado|ido|ada|ida|ar|er|ir)$")
+
+
+def _link_phrase(between: str) -> str | None:
+    """Frase de enlace aceptable: corta, sin puntuación y con algo que funcione como verbo."""
+    if re.search(r"[.;:()\[\]«»\"]", between) or "," in between:
+        return None
+    words = between.split()
+    while words and tp.normalize(words[0]) in {"el", "la", "los", "las", "un", "una", "unos", "unas", "y", "que"}:
+        words.pop(0)
+    while words and tp.normalize(words[-1]) in {"el", "la", "los", "las", "un", "una", "unos", "unas", "y"}:
+        words.pop()
+    if not 1 <= len(words) <= 5:
+        return None
+    norm = [tp.normalize(w) for w in words]
+    has_verb = any(w in LINK_VERBS or (len(w) >= 4 and w not in tp.STOPWORDS and VERB_END.search(w)) for w in norm)
+    return " ".join(words) if has_verb else None
+
+
+def _extend_term(term: str, text: str) -> str:
+    """«dióxido» -> «dióxido de carbono» si en el texto casi siempre aparece así."""
+    pat = re.compile(rf"(?<![\wáéíóúñ]){re.escape(term)}\s+((?:de |del )?[a-záéíóúñ]{{4,}})", re.I)
+    raw = {}
+    for m in pat.finditer(text):
+        raw.setdefault(m.group(1).lower(), m.group(1))
+    found = Counter(m.group(1).lower() for m in pat.finditer(text))
+    total = len(re.findall(rf"(?<![\wáéíóúñ]){re.escape(term)}(?![\wáéíóúñ])", text, re.I))
+    if found:
+        best, n = found.most_common(1)[0]
+        if n >= 2 and n >= 0.6 * total and tp.normalize(best.split()[-1]) not in tp.STOPWORDS:
+            return f"{term} {raw[best]}"
+    return term
+
+
+def _heuristic_map(title: str, text: str, terms: list[str]) -> dict:
+    """Sin IA: conceptos clave del tema y, cuando dos aparecen en la misma oración separados por una frase
+    corta con verbo, esa frase se usa como enlace («la fotosíntesis [ocurre en] los cloroplastos»)."""
+    nt = tp.normalize(title)
+    concepts, seen = [], {nt}
+    for term in terms:
+        full = _extend_term(term, text)
+        key = tp.normalize(full)
+        if key in seen or tp.normalize(term) in nt.split() or any(key in s or s in key for s in seen if len(s) > 3):
+            continue
+        seen.add(key)
+        concepts.append(full)
+        if len(concepts) >= 10:
+            break
+    sentences = [x for _, x in tp.section_sentences(text)]
+    names = [title] + concepts
+    links, linked = [], set()
+    for s_ in sentences:
+        low = s_.lower()
+        found = sorted(((low.find(c.lower()), c) for c in names if c.lower() in low), key=lambda x: x[0])
+        for (i1, c1), (i2, c2) in zip(found, found[1:]):
+            if c1 == c2 or (c1, c2) in linked or (c2, c1) in linked:
+                continue
+            phrase = _link_phrase(s_[i1 + len(c1): i2].strip())
+            if phrase:
+                links.append({"from": c1, "to": c2, "label": phrase})
+                linked.add((c1, c2))
+        if len(links) >= 12:
+            break
+    has_parent = {lk["to"] for lk in links}
+    for c in concepts:
+        if c not in has_parent:
+            links.append({"from": title, "to": c, "label": ""})
+    return {"concepts": names, "links": links}
+
+
+@app.post("/api/topics/{topic_id}/concept-map")
+async def topic_concept_map(topic_id: int):
+    """Borrador de mapa conceptual de un tema (con IA si está configurada). El usuario lo edita después."""
+    with db.tx() as con:
+        t = db.row(con.execute("SELECT id, title FROM topics WHERE id=?", (topic_id,)).fetchone())
+        if not t:
+            raise HTTPException(404, "Tema no encontrado")
+        text = "\n".join(r["text"] for r in con.execute("SELECT text FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
+        cfg = ai_config(con)
+    graph, by = None, "heuristica"
+    if cfg.enabled:
+        graph = await ai.concept_map(cfg, t["title"], text)
+        by = cfg.label if graph else by
+    if not graph:
+        graph = _heuristic_map(t["title"], text, topic_concepts(topic_id)["terms"])
+    return {**graph, "by": by, "title": t["title"]}
+
+
+# --------------------------------------------------------------------------- #
+# Juego de plataformas: preguntas y puntajes
+# --------------------------------------------------------------------------- #
+def _topic_ids(raw: str) -> list[int]:
+    return sorted({int(x) for x in raw.split(",") if x.strip().isdigit()})[:10]
+
+
+@app.get("/api/game/questions")
+def game_questions(topic_ids: str = "", level: str = "mixto", n: int = 40):
+    """Preguntas de respuesta rápida (opción múltiple y verdadero/falso) para el juego.
+
+    Primero las que tenés que repasar o en las que te equivocaste; las respuestas no se mandan:
+    se corrigen con /api/answer, así cada respuesta del juego cuenta para el repaso espaciado.
+    """
+    ids = _topic_ids(topic_ids)
+    n = max(5, min(n, 80))
+    rng = random.Random()
+    with db.tx() as con:
+        if not ids:
+            ids = [r["id"] for r in con.execute("SELECT id FROM topics")]
+        if not ids:
+            return {"questions": [], "topics": []}
+        marks = ",".join("?" * len(ids))
+        topics = db.rows(con.execute(f"SELECT id, title FROM topics WHERE id IN ({marks})", ids))
+        rows = [db.item_dict(r) for r in con.execute(
+            f"SELECT * FROM items WHERE topic_id IN ({marks}) AND hidden=0 AND kind IN ('mc','tf','cloze')", ids)]
+    titles = {t["id"]: t["title"] for t in topics}
+    wanted = {"basico": {1}, "intermedio": {2}, "avanzado": {3}}.get(level)
+    now = now_iso()
+    cloze_answers = defaultdict(list)
+    for it in rows:
+        if it["kind"] == "cloze" and len(it["answer"]) <= 40:
+            cloze_answers[it["topic_id"]].append(it["answer"])
+
+    def priority(it):
+        if it.get("last_verdict") in ("incorrect", "partial"):
+            return 0
+        if it.get("due") and it["due"] <= now:
+            return 1
+        if not it.get("seen"):
+            return 2
+        return 3
+
+    out = []
+    for it in rows:
+        if wanted and (it.get("level") or 2) not in wanted:
+            continue
+        if it["kind"] == "mc" and it.get("options") and len(it["options"]) >= 2:
+            opts = list(it["options"])
+        elif it["kind"] == "tf":
+            opts = ["Verdadero", "Falso"]
+        elif it["kind"] == "cloze":
+            others = list({a for a in cloze_answers[it["topic_id"]] if tp.normalize(a) != tp.normalize(it["answer"])})
+            if len(others) < 3 or len(it["answer"]) > 40:
+                continue
+            opts = [it["answer"]] + rng.sample(others, 3)
+        else:
+            continue
+        if it["kind"] != "tf":
+            rng.shuffle(opts)
+        out.append({"id": it["id"], "kind": "tf" if it["kind"] == "tf" else "mc", "prompt": it["prompt"], "options": opts,
+                    "topic": titles.get(it["topic_id"], ""), "level": it.get("level") or 2, "fill": it["kind"] == "cloze",
+                    "_p": priority(it),
+                    "_r": rng.random(), "_c": it["kind"] == "cloze"})
+    # preferencia: las que hay que repasar; entre las demás, primero las de opción múltiple «de verdad»
+    out.sort(key=lambda q: (q["_p"], q["_c"], q["_r"]))
+    out = out[:n]
+    rng.shuffle(out)
+    for q in out:
+        for k in ("_p", "_r", "_c"):
+            q.pop(k)
+    return {"questions": out, "topics": topics}
+
+
+class GameScoreIn(BaseModel):
+    topic_ids: list[int] = Field(default_factory=list)
+    level: int = Field(ge=1, le=999)
+    score: int = Field(ge=0, le=10_000_000)
+    correct: int = Field(ge=0, le=10_000)
+    wrong: int = Field(ge=0, le=10_000)
+
+
+@app.post("/api/game/score")
+def game_score(body: GameScoreIn):
+    key = ",".join(str(i) for i in sorted(set(body.topic_ids))) or "todos"
+    with db.tx() as con:
+        con.execute("INSERT INTO game_scores(topic_key, level, score, correct, wrong, created_at) VALUES(?,?,?,?,?,?)",
+                    (key, body.level, body.score, body.correct, body.wrong, now_iso()))
+        best = con.execute("SELECT MAX(score) AS s, MAX(level) AS l FROM game_scores WHERE topic_key=?", (key,)).fetchone()
+    return {"best_score": best["s"], "best_level": best["l"]}
+
+
+@app.get("/api/game/best")
+def game_best(topic_ids: str = ""):
+    key = ",".join(str(i) for i in _topic_ids(topic_ids)) or "todos"
+    with db.tx() as con:
+        best = con.execute("SELECT MAX(score) AS s, MAX(level) AS l FROM game_scores WHERE topic_key=?", (key,)).fetchone()
+    return {"best_score": best["s"] or 0, "best_level": best["l"] or 0}
+
+
+# --------------------------------------------------------------------------- #
 # Videos de YouTube recomendados
 # --------------------------------------------------------------------------- #
 GENERIC_SECTIONS = {"introduccion", "resumen", "apuntes", "la pregunta", "descripcion", "de que trata el libro", "temas",

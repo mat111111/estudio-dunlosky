@@ -177,6 +177,47 @@ class TestNuevasFunciones(unittest.TestCase):
                 self.assertRegex(page, rf"/static/{f}\?v=[0-9a-f]{{8}}")
             self.assertEqual(c.get("/static/app.js").headers["cache-control"], "no-cache")
 
+    def test_mapas_conceptuales(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Fotosíntesis", "notes": {"title": "P", "text": MUESTRA}}).json()["id"]
+            g = c.post(f"/api/topics/{tid}/concept-map").json()
+            self.assertEqual(g["concepts"][0], "Fotosíntesis")
+            self.assertEqual(len({x.lower() for x in g["concepts"]}), len(g["concepts"]))  # sin repetir el título
+            self.assertTrue(any(l["label"] for l in g["links"]))  # alguna frase de enlace sacada del texto
+            data = {"nodes": [{"id": "a", "x": 0, "y": 0, "w": 160, "h": 50, "shape": "round", "text": "<b>Hola</b>", "fill": "#E8ECFC"},
+                              {"id": "b", "x": 0, "y": 120, "w": 160, "h": 50, "shape": "hexagono", "text": "Mundo", "fill": "javascript:alert(1)"}],
+                    "edges": [{"id": "e1", "from": "a", "to": "b", "label": "saluda a", "arrow": "end"},
+                              {"id": "e2", "from": "a", "to": "zzz", "label": "rota"}]}
+            m = c.post("/api/maps", json={"title": "Mi mapa", "topic_id": tid, "data": data}).json()
+            self.assertEqual(m["data"]["nodes"][1]["shape"], "round")      # forma desconocida -> por defecto
+            self.assertIsNone(m["data"]["nodes"][1]["fill"])                # color inválido descartado
+            self.assertEqual(len(m["data"]["edges"]), 1)                    # flecha a un nodo inexistente descartada
+            self.assertEqual(m["data"]["nodes"][0]["text"], "<b>Hola</b>")  # el texto se guarda tal cual (se escapa al dibujar)
+            r = c.put(f"/api/maps/{m['id']}", json={"title": "Renombrado", "data": {**data, "edges": []}}).json()
+            self.assertEqual(r["title"], "Renombrado")
+            lista = c.get("/api/maps").json()
+            self.assertEqual((lista[0]["nodes"], lista[0]["edges"]), (2, 0))
+            big = {"nodes": [{"id": f"n{i}", "x": 0, "y": 0, "text": "x" * 400} for i in range(1600)], "edges": []}
+            self.assertEqual(c.put(f"/api/maps/{m['id']}", json={"data": big}).status_code, 400)
+            self.assertEqual(c.delete(f"/api/maps/{m['id']}").json(), {"ok": True})
+            self.assertEqual(c.get(f"/api/maps/{m['id']}").status_code, 404)
+
+    def test_juego_preguntas_y_puntaje(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Juego", "notes": {"title": "P", "text": MUESTRA}}).json()["id"]
+            d = c.get(f"/api/game/questions?topic_ids={tid}&n=20").json()
+            self.assertGreaterEqual(len(d["questions"]), 3)
+            q = d["questions"][0]
+            self.assertNotIn("answer", q)          # la respuesta no viaja al navegador
+            self.assertIn(q["kind"], ("mc", "tf"))
+            self.assertGreaterEqual(len(q["options"]), 2)
+            r = c.post("/api/answer", json={"item_id": q["id"], "answer": q["options"][0], "technique": "juego"}).json()
+            self.assertIn(r["verdict"], ("correct", "incorrect"))
+            self.assertEqual(c.post("/api/game/score", json={"topic_ids": [tid], "level": 2, "score": 850, "correct": 3, "wrong": 1}).json()["best_score"], 850)
+            c.post("/api/game/score", json={"topic_ids": [tid], "level": 1, "score": 100, "correct": 1, "wrong": 0})
+            self.assertEqual(c.get(f"/api/game/best?topic_ids={tid}").json(), {"best_score": 850, "best_level": 2})
+            self.assertEqual(c.post("/api/game/score", json={"topic_ids": [tid], "level": 0, "score": -5, "correct": 0, "wrong": 0}).status_code, 422)
+
     def test_videos_sin_clave(self):
         with TestClient(app) as c:
             tid = c.post("/api/topics", json={"title": "Fotosíntesis", "notes": {"title": "Fases", "text": MUESTRA}}).json()["id"]

@@ -84,6 +84,10 @@ class TestLogin(unittest.TestCase):
             self.assertEqual(b.get(f"/api/notebook/{nid}").status_code, 404)
             self.assertEqual(b.delete(f"/api/notebook/{nid}").status_code, 404)
             self.assertEqual(a.get(f"/api/notebook/{nid}").json()["content"], "solo mío")
+            mid = a.post("/api/maps", json={"title": "Mapa privado", "data": {"nodes": [], "edges": []}}).json()["id"]
+            self.assertEqual(b.get("/api/maps").json(), [])
+            self.assertEqual(b.get(f"/api/maps/{mid}").status_code, 404)
+            self.assertEqual(b.get(f"/api/game/questions?topic_ids={tid}").json()["questions"], [])
 
     def test_fuerza_bruta(self):
         with TestClient(app) as c:

@@ -315,6 +315,33 @@ async def explain_concept(cfg: AIConfig, topic: str, term: str, excerpts: list[s
         return None
 
 
+async def concept_map(cfg: AIConfig, topic: str, text: str) -> dict | None:
+    """Mapa conceptual al estilo de Novak: conceptos (sustantivos) unidos por frases de enlace."""
+    user = (
+        f"Tema: {topic}\n\nTexto de estudio:\n{text[:9000]}\n\n"
+        "Armá un mapa conceptual del tema basado SOLO en el texto. Reglas: entre 8 y 16 conceptos breves "
+        "(1 a 4 palabras, sin verbos); el primero es el concepto central; cada relación tiene una frase de enlace "
+        "corta con verbo (por ejemplo «se divide en», «ocurre en», «produce», «es un tipo de») de modo que "
+        "«concepto origen + frase + concepto destino» forme una afirmación verdadera según el texto; organizá de lo "
+        "general a lo particular; incluí alguna relación cruzada entre ramas si el texto la justifica. "
+        'Devolvé JSON: {"conceptos": ["..."], "relaciones": [{"desde": "...", "frase": "...", "hasta": "..."}]}'
+    )
+    try:
+        data = _json_block(await _call(cfg, EXPLAIN_SYSTEM, user, 1500))
+    except Exception:  # noqa: BLE001
+        return None
+    concepts = [str(c).strip()[:60] for c in data.get("conceptos", []) if str(c).strip()][:18]
+    names = {c.lower() for c in concepts}
+    rels = []
+    for r in data.get("relaciones", []):
+        a, b = str(r.get("desde", "")).strip(), str(r.get("hasta", "")).strip()
+        if a.lower() in names and b.lower() in names and a.lower() != b.lower():
+            rels.append({"from": a, "to": b, "label": str(r.get("frase", "")).strip()[:50]})
+    if len(concepts) < 3 or not rels:
+        return None
+    return {"concepts": concepts, "links": rels[:30]}
+
+
 async def explain_answer(cfg: AIConfig, question: str, answer: str, options: list | None, context: str) -> str | None:
     user = (
         f"Pregunta: {question}\nRespuesta correcta: {answer}\n"

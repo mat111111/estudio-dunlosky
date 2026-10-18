@@ -156,6 +156,9 @@ const routes = [
   [/^\/pomodoro$/, viewPomodoro, "pomodoro"],
   [/^\/tareas$/, viewTasks, "tareas"],
   [/^\/notas$/, viewNotebook, "notas"],
+  [/^\/mapas$/, viewMaps, "mapas"],
+  [/^\/mapas\/(\d+)$/, viewMapEditor, "mapas"],
+  [/^\/juego$/, viewGame, "juego"],
   [/^\/ajustes$/, viewSettings, "ajustes"],
 ];
 function parseHash() {
@@ -643,6 +646,8 @@ async function viewTopic(id, params) {
           ${s.errors ? `<button class="btn big" id="go-errors">Practicar errores (${s.errors})</button>` : ""}
           <button class="btn ghost big" id="go-export" aria-expanded="false">Guardar PDF</button>
           <a class="btn ghost big" href="#/notas?tema=${t.id}">Anotar</a>
+          <a class="btn ghost big" href="#/mapas?tema=${t.id}">Mapa conceptual</a>
+          <a class="btn ghost big" href="#/juego?temas=${t.id}">Jugar</a>
         </div>
         ${levelPicker()}
         <div class="panel export-panel" id="export-panel" hidden>

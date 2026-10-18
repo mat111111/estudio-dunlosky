@@ -2,7 +2,7 @@
 
 Aplicación de estudio que funciona en tu navegador y se levanta con Docker. Escribís cualquier tema, la app busca la información en enciclopedias, libros de texto, artículos académicos y foros de programación (o usa tus apuntes), genera preguntas a partir del texto, corrige tus respuestas comparándolas con la fuente y te hace practicar justo las partes en las que te equivocaste.
 
-Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas, **cuentas con usuario y contraseña**, **bloc de notas**, **videos de YouTube recomendados** para cada tema y **guardado en PDF** del material y de las preguntas.
+Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas, **cuentas con usuario y contraseña**, **bloc de notas**, **mapas conceptuales**, un **juego de plataformas con preguntas**, **videos de YouTube recomendados** para cada tema y **guardado en PDF** del material y de las preguntas.
 
 ---
 
@@ -67,6 +67,23 @@ Atajos de teclado en la práctica: `1`–`4` eligen una opción, `Enter` pasa a 
 - Con `#` al principio de una línea hacés un título y con `-` una lista; así queda prolija al **guardarla en PDF**. También se puede descargar como `.txt`.
 - **Nota rápida**: el botón amarillo con el lápiz (abajo a la derecha) está en todas las pantallas. Anotás una duda sin salir de lo que estás haciendo; si estás en un tema, queda asociada a ese tema.
 - En cada tema, **Anotar** abre una nota nueva ya asociada.
+
+### Mapas conceptuales
+En el menú, **Mapas conceptuales** (o el botón **Mapa conceptual** de cada tema):
+- **Lienzo libre** con cuadros, cuadros redondeados, óvalos, círculos, rombos, notas adhesivas y texto suelto; colores, tamaño de letra y negrita.
+- **Flechas** con **frase de enlace** («es un», «produce», «se divide en»), de una punta, dos puntas o sin puntas, y punteadas.
+- **Doble clic** (o doble toque) en el lienzo crea un concepto; arrastrando el **punto azul** de un concepto hasta otro se conectan, y si se suelta en el vacío se crea un concepto nuevo ya conectado. **Tab** agrega un concepto hijo.
+- Mover arrastrando, cambiar el tamaño desde la esquina, seleccionar varios con **Shift** + arrastrar, zoom con la rueda (o con dos dedos), deshacer y rehacer (**Ctrl+Z / Ctrl+Y**), duplicar (**Ctrl+D**).
+- **Generar desde un tema**: arma un borrador con los conceptos del tema. Con IA, el borrador trae frases de enlace basadas en el texto; sin IA, toma los conceptos clave y usa como enlace las palabras que los unen en una misma oración. Después lo corregís vos: completar y discutir las relaciones es lo que hace que sirva para estudiar.
+- Se guarda solo y se descarga como **PNG** o **SVG**.
+
+### Saltá y Aprendé (juego)
+Un juego de plataformas original, en un mundo de hojas de cuaderno: un estudiante con birrete corre y salta, junta hojas y esquiva a los «Olvidos» (manchas violetas) y a las «Distracciones» (burbujas rojas), a los que puede pisar.
+- Cada **bloque de idea** (amarillo, con una lamparita) es una **pregunta de tus temas** (opción múltiple, verdadero o falso, o completar con opciones). Si acertás ganás puntos y un escudo; si te equivocás perdés una vida.
+- Al final de cada nivel está el **examen final**: una pregunta más para pasar al siguiente nivel, que es más largo y difícil.
+- **Las respuestas cuentan de verdad**: se corrigen igual que en la práctica y alimentan el repaso espaciado; las que fallás quedan en **Mis errores**, y al terminar podés practicarlas.
+- Se eligen los temas y la dificultad de las preguntas; se guarda tu récord por temas.
+- Controles: flechas o A/D para moverse, Espacio o ↑ para saltar (mantenerlo para saltar más alto), P para pausa, 1 a 4 para responder. En el celular aparecen botones en pantalla (conviene ponerlo horizontal).
 
 ### Videos de YouTube recomendados
 En cada tema, la pestaña **Videos** muestra videos que explican el tema (se descartan los Shorts y los de menos de 2 minutos y medio), más enlaces para buscar en YouTube cada parte del tema. La ficha de cada concepto («¿por qué?») tiene un botón **Ver videos en YouTube** y, al buscar un tema nuevo, aparece el enlace a los videos sobre esa búsqueda. Los videos encontrados también se incluyen en el **apunte en PDF**, con su enlace.
@@ -315,7 +332,8 @@ estudio-dunlosky/
 │   ├── db.py          Esquema y acceso a SQLite
 │   └── static/        Interfaz sin frameworks: index.html, styles.css, app.js,
 │                      pomodoro.js (temporizador y sonidos), tasks.js (tareas), concepts.js (fichas «¿por qué?»)
-│                      y notes.js (bloc de notas y nota rápida)
+│                      notes.js (bloc de notas y nota rápida), maps.js (mapas conceptuales)
+│                      y game.js (juego Saltá y Aprendé)
 ├── searxng/           Configuración del buscador de toda la web (SearXNG)
 ├── tests/             Pruebas automáticas (no necesitan internet)
 ├── Dockerfile

@@ -131,6 +131,23 @@ CREATE TABLE IF NOT EXISTS notebook (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notebook_updated ON notebook(updated_at);
+CREATE TABLE IF NOT EXISTS concept_maps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS game_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_key TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    correct INTEGER NOT NULL,
+    wrong INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS topic_videos (
     topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
