@@ -142,6 +142,41 @@ class TestNuevasFunciones(unittest.TestCase):
             ambos = c.get(f"/api/topics/{tid}/export.pdf?content=ambos").content
             self.assertGreater(len(ambos), len(solo))
 
+    def test_bloc_de_notas(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Notas", "notes": {"title": "P", "text": MUESTRA}}).json()["id"]
+            n = c.post("/api/notebook", json={"title": "", "content": "Duda: ¿por qué la fase oscura no depende de la luz?\nRepasar."}).json()
+            self.assertEqual(n["title"], "Duda: ¿por qué la fase oscura no depende de la luz?")  # sin título: primera línea
+            self.assertFalse(n["has_title"])
+            c.post("/api/notebook", json={"title": "100% seguro", "content": "a_b ' OR 1=1 --", "topic_id": tid})
+            # la búsqueda trata % _ ' como texto, no como comodines ni SQL
+            self.assertEqual([x["title"] for x in c.get("/api/notebook?q=100%").json()], ["100% seguro"])
+            self.assertEqual(len(c.get("/api/notebook?q=a_b").json()), 1)
+            self.assertEqual(len(c.get("/api/notebook?q=' OR 1=1 --").json()), 1)
+            self.assertEqual(len(c.get("/api/notebook?q=%").json()), 1)
+            self.assertEqual(len(c.get(f"/api/notebook?topic_id={tid}").json()), 1)
+            up = c.patch(f"/api/notebook/{n['id']}", json={"title": "Fase oscura", "pinned": True, "color": "amarillo"}).json()
+            self.assertTrue(up["pinned"])
+            self.assertEqual(c.get("/api/notebook").json()[0]["id"], n["id"])  # fijada arriba
+            self.assertEqual(c.patch(f"/api/notebook/{n['id']}", json={"color": "<script>"}).status_code, 400)
+            self.assertEqual(c.post("/api/notebook", json={"topic_id": 9999}).status_code, 400)
+            r = c.get(f"/api/notebook/{n['id']}/export.pdf")
+            self.assertTrue(r.content.startswith(b"%PDF"))
+            self.assertIn("Fase_oscura.pdf", r.headers["content-disposition"])
+            # al borrar el tema, la nota queda sin tema (no se pierde)
+            c.delete(f"/api/topics/{tid}")
+            self.assertTrue(all(x["topic_id"] is None for x in c.get("/api/notebook").json()))
+            self.assertEqual(c.delete(f"/api/notebook/{n['id']}").json(), {"ok": True})
+            self.assertEqual(c.get(f"/api/notebook/{n['id']}").status_code, 404)
+
+    def test_videos_sin_clave(self):
+        with TestClient(app) as c:
+            tid = c.post("/api/topics", json={"title": "Fotosíntesis", "notes": {"title": "Fases", "text": MUESTRA}}).json()["id"]
+            d = c.get(f"/api/topics/{tid}/videos").json()
+            self.assertEqual(d["videos"], [])
+            self.assertTrue(d["needs_key"])
+            self.assertTrue(d["search_url"].startswith("https://www.youtube.com/results?search_query="))
+
     def test_tareas_y_pomodoros(self):
         with TestClient(app) as c:
             t = c.post("/api/tasks", json={"title": "Parcial", "horizon": "mes", "due_date": "2099-01-10"}).json()

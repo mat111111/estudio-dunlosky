@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 
-from . import ai, auth, db, generator, grader, search_providers, sources, srs
+from . import ai, auth, db, generator, grader, search_providers, sources, srs, videos
 from . import textproc as tp
 
 APP_DIR = Path(__file__).parent
@@ -370,9 +370,11 @@ async def test_ai():
 # Búsqueda de fuentes y creación de temas
 # --------------------------------------------------------------------------- #
 WEB_SITE = {"site": "web", "name": "Google (vía Gemini)", "about": "Páginas web que encuentra Google", "lang": "es",
-            "group": "Web"}
+            "group": "Google"}
 WIKI_GROUP = "Enciclopedias y libros"
-SEARCH_KEYS = {"tavily": ("tavily_key", "TAVILY_API_KEY"), "brave": ("brave_key", "BRAVE_API_KEY"),
+SEARCH_KEYS = {"serper": ("serper_key", "SERPER_API_KEY"), "serpapi": ("serpapi_key", "SERPAPI_API_KEY"),
+               "google": ("google_key", "GOOGLE_API_KEY"),  # YouTube Data API (y Google Libros, opcional)
+               "tavily": ("tavily_key", "TAVILY_API_KEY"), "brave": ("brave_key", "BRAVE_API_KEY"),
                "openalex": ("openalex_key", "OPENALEX_API_KEY")}
 
 
@@ -391,8 +393,9 @@ def _provider_available(site: str, keys: dict) -> bool:
     meta = search_providers.PROVIDERS[site]
     if meta.get("needs") == "anthropic":
         return bool(keys.get("anthropic"))
-    if meta.get("key") and not meta.get("key_optional"):
-        return bool(keys.get(site))
+    name = search_providers.key_name(site)
+    if name and not meta.get("key_optional"):
+        return bool(keys.get(name))
     return True
 
 
@@ -408,10 +411,12 @@ def list_sources():
                 "why_off": "Configurá una clave de Gemini en Ajustes"})
     for k, v in search_providers.PROVIDERS.items():
         ok = _provider_available(k, keys)
+        kn = search_providers.key_name(k)
+        key_label = {"serper": "Serper", "serpapi": "SerpApi"}.get(kn, v["name"])
         why = ("Configurá una clave de Claude en Ajustes" if v.get("needs") == "anthropic"
-               else f"Configurá la clave de {v['name']} en Ajustes")
+               else f"Configurá la clave de {key_label} en Ajustes")
         out.append({"site": k, "name": v["name"], "about": v["about"], "lang": "es", "group": v["group"],
-                    "default": ok and k == "tavily", "available": ok, "why_off": why})
+                    "default": ok and k in ("tavily", "serper", "serpapi"), "available": ok, "why_off": why})
     return out
 
 
@@ -496,8 +501,8 @@ async def search(q: str, sites: str = "", lang: str | None = None, category: str
         g["group"] = WIKI_GROUP
     others = list(results[1:])
     # orden: web primero (más amplia), después enciclopedias, después el resto
-    web = [g for g in others if g.get("group") == "Web"]
-    rest = [g for g in others if g.get("group") != "Web"]
+    web = [g for g in others if g.get("group") in ("Google", "Web")]
+    rest = [g for g in others if g.get("group") not in ("Google", "Web")]
     res["groups"] = web + res["groups"] + rest
     # si en español no hubo nada, probamos en inglés
     if wiki and not any(g["results"] for g in res["groups"]) and "wikipedia_en" not in chosen:
@@ -1453,7 +1458,7 @@ async def topic_concept(topic_id: int, term: str):
             with db.tx() as con:
                 con.execute("INSERT OR REPLACE INTO concept_cache(topic_id, term, content, created_at) VALUES(?,?,?,?)",
                             (topic_id, nt, json.dumps(explanation, ensure_ascii=False), now_iso()))
-    return {"term": term, "definition": best[2] if best else (mentions[0]["text"] if mentions else None),
+    return {"term": term, "topic": t["title"], "definition": best[2] if best else (mentions[0]["text"] if mentions else None),
             "reasons": reasons, "mentions": mentions[:6], "total_mentions": len(mentions),
             "explanation": explanation, "ai_enabled": cfg.enabled, "by": cfg.label if explanation else None,
             "practice": practice}
@@ -1581,6 +1586,8 @@ def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen"
         items = [db.item_dict(r) for r in con.execute(
             "SELECT * FROM items WHERE topic_id=? AND hidden=0 ORDER BY section_id, sentence_idx, id", (topic_id,))]
         notes_secs = _notes_sections(con, topic_id, secs) if content != "preguntas" else []
+        vrow = con.execute("SELECT content FROM topic_videos WHERE topic_id=?", (topic_id,)).fetchone()
+        vids = json.loads(vrow["content"]) if vrow and content != "preguntas" else []
         glossary = []
         if content != "preguntas":
             for r in con.execute("SELECT term, content FROM concept_cache WHERE topic_id=? ORDER BY term", (topic_id,)):
@@ -1600,10 +1607,180 @@ def export_topic_pdf(topic_id: int, level: str = "mixto", layout: str = "examen"
         fname = f"{safe}_preguntas.pdf"
     else:
         pdf = export_pdf.build_notes_pdf(t, srcs, notes_secs, glossary, bool(t.get("ai_generated")),
-                                         per_section if content == "ambos" else None)
+                                         per_section if content == "ambos" else None, vids)
         fname = f"{safe}_apunte.pdf"
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# --------------------------------------------------------------------------- #
+# Videos de YouTube recomendados
+# --------------------------------------------------------------------------- #
+GENERIC_SECTIONS = {"introduccion", "resumen", "apuntes", "la pregunta", "descripcion", "de que trata el libro", "temas",
+                    "historia", "vease tambien", "referencias", "notas", "conclusion", "conclusiones"}
+
+
+def _section_searches(title: str, secs: list[dict]) -> list[dict]:
+    out, seen = [], set()
+    for sec in secs:
+        name = sec["title"].strip()
+        key = tp.normalize(name)
+        if not name or key in GENERIC_SECTIONS or key in seen or key.startswith(("respuesta", "resumen")):
+            continue
+        seen.add(key)
+        out.append({"title": name, "url": videos.search_url(f"{title} {name}")})
+    return out[:8]
+
+
+@app.get("/api/topics/{topic_id}/videos")
+async def topic_videos(topic_id: int, refresh: bool = False):
+    with db.tx() as con:
+        t = db.row(con.execute("SELECT id, title FROM topics WHERE id=?", (topic_id,)).fetchone())
+        if not t:
+            raise HTTPException(404, "Tema no encontrado")
+        secs = db.rows(con.execute("SELECT title FROM sections WHERE topic_id=? ORDER BY ord", (topic_id,)))
+        cached = con.execute("SELECT content, via, fetched_at FROM topic_videos WHERE topic_id=?", (topic_id,)).fetchone()
+        keys = search_keys(con)
+    base = {"search_url": videos.search_url(f"{t['title']} explicación"), "sections": _section_searches(t["title"], secs),
+            "providers": videos.available(keys)}
+    if cached and not refresh:
+        return {**base, "videos": json.loads(cached["content"]), "via": cached["via"], "fetched_at": cached["fetched_at"],
+                "cached": True, "errors": []}
+    if not base["providers"]:
+        return {**base, "videos": [], "via": None, "needs_key": True, "errors": []}
+    found = await videos.find(t["title"], keys)
+    if found["videos"]:
+        with db.tx() as con:
+            con.execute("INSERT OR REPLACE INTO topic_videos(topic_id, content, via, fetched_at) VALUES(?,?,?,?)",
+                        (topic_id, json.dumps(found["videos"], ensure_ascii=False), found["via"], now_iso()))
+    return {**base, "videos": found["videos"], "via": found["via"], "fetched_at": now_iso(), "cached": False,
+            "errors": found["errors"]}
+
+
+# --------------------------------------------------------------------------- #
+# Bloc de notas
+# --------------------------------------------------------------------------- #
+NOTE_COLORS = ("amarillo", "verde", "azul", "rosa", "violeta")
+NOTE_MAX = 100_000
+
+
+class NoteIn(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=NOTE_MAX)
+    topic_id: int | None = None
+    pinned: bool | None = None
+    color: str | None = None
+
+
+def _note_out(r: dict, full: bool = False) -> dict:
+    content = r["content"] or ""
+    # para la lista: sin marcas de formato (#, -, 1.) y, si no hay título, sin repetir la primera línea
+    lines = [re.sub(r"^\s*(#{1,3}|[-*•]|\d+[.)])\s+", "", ln).strip() for ln in content.splitlines()]
+    lines = [ln for ln in lines if ln]
+    first = lines[0] if lines else ""
+    body = lines if r["title"] else lines[1:]
+    out = {"id": r["id"], "title": r["title"] or first[:80] or "Nota sin título", "has_title": bool(r["title"]),
+           "topic_id": r["topic_id"], "topic_title": r.get("topic_title"), "pinned": bool(r["pinned"]),
+           "color": r["color"], "created_at": r["created_at"], "updated_at": r["updated_at"],
+           "words": len(content.split()), "snippet": " · ".join(body)[:180]}
+    if full:
+        out["content"] = content
+        out["raw_title"] = r["title"] or ""
+    return out
+
+
+def _note_row(con, note_id: int) -> dict:
+    r = db.row(con.execute("SELECT n.*, t.title AS topic_title FROM notebook n LEFT JOIN topics t ON t.id = n.topic_id "
+                           "WHERE n.id = ?", (note_id,)).fetchone())
+    if not r:
+        raise HTTPException(404, "Nota no encontrada")
+    return r
+
+
+def _check_note_fields(con, body: NoteIn) -> None:
+    if body.color is not None and body.color not in NOTE_COLORS and body.color != "":
+        raise HTTPException(400, "Color no válido.")
+    if body.topic_id is not None and body.topic_id != 0 and not con.execute(
+            "SELECT 1 FROM topics WHERE id = ?", (body.topic_id,)).fetchone():
+        raise HTTPException(400, "Ese tema no existe.")
+
+
+@app.get("/api/notebook")
+def list_notebook(q: str = "", topic_id: int | None = None):
+    sql = ("SELECT n.*, t.title AS topic_title FROM notebook n LEFT JOIN topics t ON t.id = n.topic_id WHERE 1=1")
+    args: list = []
+    q = q.strip()[:100]
+    if q:
+        # búsqueda con parámetros; se escapan los comodines de LIKE para buscar el texto tal cual
+        like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        sql += " AND (n.title LIKE ? ESCAPE '\\' OR n.content LIKE ? ESCAPE '\\')"
+        args += [like, like]
+    if topic_id is not None:
+        sql += " AND n.topic_id = ?"
+        args.append(topic_id)
+    sql += " ORDER BY n.pinned DESC, n.updated_at DESC LIMIT 500"
+    with db.tx() as con:
+        return [_note_out(r) for r in db.rows(con.execute(sql, args))]
+
+
+@app.get("/api/notebook/{note_id}")
+def get_note(note_id: int):
+    with db.tx() as con:
+        return _note_out(_note_row(con, note_id), full=True)
+
+
+@app.post("/api/notebook")
+def create_note(body: NoteIn):
+    with db.tx() as con:
+        _check_note_fields(con, body)
+        now = now_iso()
+        cur = con.execute(
+            "INSERT INTO notebook(title, content, topic_id, pinned, color, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+            ((body.title or "").strip(), body.content or "", body.topic_id or None, int(bool(body.pinned)),
+             body.color or None, now, now))
+        return _note_out(_note_row(con, cur.lastrowid), full=True)
+
+
+@app.patch("/api/notebook/{note_id}")
+def update_note(note_id: int, body: NoteIn):
+    with db.tx() as con:
+        _note_row(con, note_id)
+        _check_note_fields(con, body)
+        fields = []
+        args: list = []
+        if body.title is not None:
+            fields.append("title = ?"); args.append(body.title.strip())
+        if body.content is not None:
+            fields.append("content = ?"); args.append(body.content)
+        if body.topic_id is not None:
+            fields.append("topic_id = ?"); args.append(body.topic_id or None)
+        if body.pinned is not None:
+            fields.append("pinned = ?"); args.append(int(body.pinned))
+        if body.color is not None:
+            fields.append("color = ?"); args.append(body.color or None)
+        if fields:
+            fields.append("updated_at = ?"); args.append(now_iso())
+            con.execute(f"UPDATE notebook SET {', '.join(fields)} WHERE id = ?", (*args, note_id))
+        return _note_out(_note_row(con, note_id), full=True)
+
+
+@app.delete("/api/notebook/{note_id}")
+def delete_note(note_id: int):
+    with db.tx() as con:
+        _note_row(con, note_id)
+        con.execute("DELETE FROM notebook WHERE id = ?", (note_id,))
+    return {"ok": True}
+
+
+@app.get("/api/notebook/{note_id}/export.pdf")
+def export_note_pdf(note_id: int):
+    from . import export_pdf
+    with db.tx() as con:
+        n = _note_out(_note_row(con, note_id), full=True)
+    pdf = export_pdf.build_note_pdf(n["title"], n["content"], n.get("topic_title"), n["updated_at"])
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", tp.strip_accents(n["title"])).strip("_")[:60] or "nota"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.pdf"'})
 
 
 # --------------------------------------------------------------------------- #

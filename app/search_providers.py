@@ -6,6 +6,11 @@ Sin clave:
   - Europe PMC: artículos de biología y salud (resumen)
   - Stack Overflow en español y en inglés: preguntas y respuestas de programación
 
+Google:
+  - Google Libros (sin clave): libros con su descripción
+  - Serper y SerpApi (con clave): resultados de Google y de Google Académico
+  - (Google vía Gemini está en ai.py: usa la búsqueda de Google integrada en Gemini)
+
 Con clave (se carga en Ajustes):
   - Tavily: buscador web pensado para IA (1.000 búsquedas gratis por mes)
   - Brave Search: buscador web independiente
@@ -43,6 +48,16 @@ PROVIDERS: dict[str, dict] = {
     "se_superuser": {"name": "Super User", "group": "Redes y sistemas", "about": "Computadoras, Windows y sistemas operativos (en inglés)"},
     "se_dba": {"name": "Database Administrators", "group": "Bases de datos", "about": "SQL, diseño y administración de bases de datos (en inglés)"},
     "se_math": {"name": "Mathematics Stack Exchange", "group": "Matemática", "about": "Preguntas y respuestas de matemática (en inglés)"},
+    "serper": {"name": "Google (Serper)", "group": "Google", "about": "Resultados de Google (2.500 búsquedas gratis al registrarte)",
+               "key": "serper_key", "env": "SERPER_API_KEY"},
+    "serper_scholar": {"name": "Google Académico (Serper)", "group": "Google",
+                       "about": "Artículos, tesis y libros académicos de Google Scholar", "keyname": "serper"},
+    "serpapi": {"name": "Google (SerpApi)", "group": "Google", "about": "Resultados de Google (250 búsquedas gratis por mes)",
+                "key": "serpapi_key", "env": "SERPAPI_API_KEY"},
+    "serpapi_scholar": {"name": "Google Académico (SerpApi)", "group": "Google",
+                        "about": "Artículos, tesis y libros académicos de Google Scholar", "keyname": "serpapi"},
+    "google_books": {"name": "Google Libros", "group": "Google", "about": "Libros con su descripción (sin clave)",
+                     "keyname": "google", "key_optional": True},
     "tavily": {"name": "Tavily", "group": "Web", "about": "Buscador web (1.000 búsquedas gratis por mes)",
                "key": "tavily_key", "env": "TAVILY_API_KEY"},
     "brave": {"name": "Brave Search", "group": "Web", "about": "Buscador web independiente",
@@ -53,6 +68,12 @@ PROVIDERS: dict[str, dict] = {
 SO_SITES = {"so_es": "es.stackoverflow", "so_en": "stackoverflow", "se_net": "networkengineering",
             "se_serverfault": "serverfault", "se_unix": "unix", "se_superuser": "superuser", "se_dba": "dba",
             "se_math": "math"}
+
+
+def key_name(site: str) -> str | None:
+    """Nombre de la clave que usa un buscador (varios comparten la misma, por ejemplo Serper y Serper Académico)."""
+    meta = PROVIDERS[site]
+    return meta.get("keyname") or (site if meta.get("key") else None)
 
 
 def _client(**headers) -> httpx.AsyncClient:
@@ -74,7 +95,7 @@ def _plain(fragment: str) -> str:
 def _result(site: str, title: str, url: str, snippet: str, words: int = 0, ref: str | None = None,
             meta: str = "") -> dict:
     return {"site": site, "source_name": PROVIDERS[site]["name"], "lang": "es", "title": title.strip() or url,
-            "snippet": _words(snippet), "words": words, "url": url, "ref": ref, "meta": meta}
+            "snippet": _words(snippet), "words": words, "url": url, "ref": ref, "meta": meta, "kind": "provider"}
 
 
 # --------------------------------------------------------------------------- #
@@ -82,19 +103,24 @@ def _result(site: str, title: str, url: str, snippet: str, words: int = 0, ref: 
 # --------------------------------------------------------------------------- #
 CATEGORIES: dict[str, dict] = {
     "programacion": {"label": "Programación", "hint": "programación",
-                     "sites": ["so_es", "so_en", "wikilibros", "wikipedia_es", "web", "tavily", "brave"]},
+                     "sites": ["so_es", "so_en", "wikilibros", "wikipedia_es", "web", "serper", "serpapi", "tavily", "brave"]},
     "redes": {"label": "Redes", "hint": "redes de computadoras", "arxiv": ["cs.NI"],
-              "sites": ["wikipedia_es", "wikilibros", "se_net", "se_serverfault", "web", "tavily", "brave", "arxiv"]},
+              "sites": ["wikipedia_es", "wikilibros", "se_net", "se_serverfault", "web", "serper", "serpapi", "tavily", "brave",
+                        "arxiv", "google_books"]},
     "matematica": {"label": "Matemática", "hint": "matemática",
-                   "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "se_math", "web", "tavily", "brave"]},
+                   "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "se_math", "web", "serper", "serpapi", "tavily", "brave",
+                             "serper_scholar", "serpapi_scholar", "google_books"]},
     "bases_datos": {"label": "Bases de datos", "hint": "bases de datos", "arxiv": ["cs.DB"],
-                    "sites": ["wikipedia_es", "wikilibros", "se_dba", "so_es", "web", "tavily", "brave"]},
+                    "sites": ["wikipedia_es", "wikilibros", "se_dba", "so_es", "web", "serper", "serpapi", "tavily", "brave"]},
     "sistemas_operativos": {"label": "Sistemas operativos", "hint": "sistemas operativos", "arxiv": ["cs.OS"],
-                            "sites": ["wikipedia_es", "wikilibros", "se_unix", "se_superuser", "web", "tavily", "brave"]},
+                            "sites": ["wikipedia_es", "wikilibros", "se_unix", "se_superuser", "web", "serper", "serpapi", "tavily",
+                                      "brave", "google_books"]},
     "ciencias": {"label": "Ciencias y salud", "hint": "",
-                 "sites": ["wikipedia_es", "wikiversidad", "openalex", "europepmc", "web", "tavily"]},
+                 "sites": ["wikipedia_es", "wikiversidad", "openalex", "europepmc", "web", "serper", "serpapi",
+                           "serper_scholar", "serpapi_scholar", "tavily"]},
     "otros": {"label": "Otros", "hint": "",
-              "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "web", "tavily", "brave", "openalex"]},
+              "sites": ["wikipedia_es", "wikilibros", "wikiversidad", "web", "serper", "serpapi", "tavily", "brave",
+                       "openalex", "google_books"]},
 }
 
 
@@ -339,6 +365,122 @@ async def search_brave(q: str, key: str) -> list[dict]:
             for it in (r.json().get("web") or {}).get("results", []) if it.get("url")]
 
 
+# --------------------------------------------------------------------------- #
+# Google: Serper, SerpApi y Google Libros
+# --------------------------------------------------------------------------- #
+def _serper_error(r: httpx.Response) -> None:
+    if r.status_code in (401, 403):
+        raise SourceError("La clave de Serper no es válida.")
+    if r.status_code in (400, 402) and "credit" in r.text.lower():
+        raise SourceError("Se terminaron los créditos de Serper.")
+    if r.status_code == 429:
+        raise SourceError("Se alcanzó el límite de Serper; probá en un momento.")
+    r.raise_for_status()
+
+
+async def search_serper(q: str, key: str, scholar: bool = False) -> list[dict]:
+    site = "serper_scholar" if scholar else "serper"
+    body = {"q": q, "hl": "es"} if scholar else {"q": q, "gl": "ar", "hl": "es", "num": 8}
+    async with _client(**{"X-API-KEY": key, "Content-Type": "application/json"}) as cli:
+        r = await cli.post(f"https://google.serper.dev/{'scholar' if scholar else 'search'}", json=body)
+    _serper_error(r)
+    out = []
+    for it in r.json().get("organic", []):
+        url = it.get("link") or it.get("pdfUrl")
+        if not url:
+            continue
+        meta = ", ".join(str(x) for x in (it.get("publicationInfo"), it.get("year"),
+                                            f"{it['citedBy']} citas" if it.get("citedBy") else None) if x) if scholar else (it.get("date") or "")
+        out.append(_result(site, it.get("title", ""), url, it.get("snippet", ""), meta=meta))
+    return out
+
+
+def _serpapi_error(r: httpx.Response) -> None:
+    try:
+        err = r.json().get("error")
+    except ValueError:
+        err = None
+    if r.status_code in (401, 403) or (err and "invalid api key" in err.lower()):
+        raise SourceError("La clave de SerpApi no es válida.")
+    if r.status_code == 429 or (err and ("run out" in err.lower() or "limit" in err.lower())):
+        raise SourceError("Se terminaron las búsquedas de SerpApi de este mes.")
+    if err and "hasn't returned any results" in err.lower():
+        return
+    if err:
+        raise SourceError(f"SerpApi: {err}")
+    r.raise_for_status()
+
+
+async def search_serpapi(q: str, key: str, scholar: bool = False) -> list[dict]:
+    site = "serpapi_scholar" if scholar else "serpapi"
+    params = {"engine": "google_scholar" if scholar else "google", "q": q, "hl": "es", "api_key": key}
+    if not scholar:
+        params.update({"gl": "ar", "google_domain": "google.com.ar", "num": 8})
+    async with _client() as cli:
+        r = await cli.get("https://serpapi.com/search.json", params=params)
+    _serpapi_error(r)
+    out = []
+    for it in r.json().get("organic_results", []):
+        url = it.get("link")
+        if not url:
+            continue
+        meta = ""
+        if scholar:
+            pub = (it.get("publication_info") or {}).get("summary") or ""
+            cites = ((it.get("inline_links") or {}).get("cited_by") or {}).get("total")
+            meta = ", ".join(x for x in (pub, f"{cites} citas" if cites else "") if x)
+        out.append(_result(site, it.get("title", ""), url, it.get("snippet", ""), meta=meta or it.get("date", "")))
+    return out
+
+
+async def search_google_books(q: str, key: str | None = None) -> list[dict]:
+    params = {"q": q, "maxResults": 8, "printType": "books", "langRestrict": "es", "orderBy": "relevance"}
+    if key:
+        params["key"] = key
+    async with _client() as cli:
+        r = await cli.get("https://www.googleapis.com/books/v1/volumes", params=params)
+        data = r.json() if r.status_code < 400 else {}
+        if not data.get("items"):  # sin resultados en español: cualquier idioma
+            params.pop("langRestrict")
+            r = await cli.get("https://www.googleapis.com/books/v1/volumes", params=params)
+            data = r.json() if r.status_code < 400 else {}
+    if r.status_code == 429:
+        raise SourceError("Google Libros alcanzó su límite diario; probá más tarde.")
+    out = []
+    for it in data.get("items", []):
+        v = it.get("volumeInfo") or {}
+        desc = _plain(v.get("description") or (it.get("searchInfo") or {}).get("textSnippet") or "")
+        if len(desc.split()) < 25:
+            continue  # sin descripción no hay de dónde sacar preguntas
+        meta = ", ".join(x for x in (", ".join(v.get("authors", [])[:2]), (v.get("publishedDate") or "")[:4],
+                                     v.get("publisher") or "") if x)
+        title = v.get("title", "") + (f": {v['subtitle']}" if v.get("subtitle") else "")
+        out.append(_result("google_books", title, v.get("infoLink") or f"https://books.google.com/books?id={it.get('id')}",
+                           desc, len(desc.split()), it.get("id"), meta))
+    return out
+
+
+async def fetch_google_books(ref: str, key: str | None = None) -> dict:
+    params = {"key": key} if key else {}
+    async with _client() as cli:
+        r = await cli.get(f"https://www.googleapis.com/books/v1/volumes/{quote(ref)}", params=params)
+    if r.status_code >= 400:
+        raise SourceError("No se pudo abrir ese libro en Google Libros.")
+    v = r.json().get("volumeInfo") or {}
+    _, desc = sources.html_to_text(f"<article>{v.get('description') or ''}</article>")
+    if len(desc.split()) < 40:
+        raise SourceError("Ese libro tiene una descripción muy corta para estudiar. Abrí su vista previa en Google Libros.")
+    authors = ", ".join(v.get("authors", [])[:3])
+    sections = [{"title": "De qué trata el libro", "text": desc}]
+    cats = v.get("categories") or []
+    if cats:
+        sections.append({"title": "Temas", "text": "El libro trata sobre " + ", ".join(cats) + "."})
+    return {"title": v.get("title") or "Libro", "lang": v.get("language") or "es",
+            "url": v.get("infoLink") or v.get("previewLink"), "revid": None, "timestamp": None,
+            "source_name": f"Google Libros{', ' + authors if authors else ''} ({(v.get('publishedDate') or 's/f')[:4]})",
+            "license": None, "sections": sections[:1] if len(sections[0]["text"].split()) > 80 else sections}
+
+
 async def search_claude_web(q: str, key: str, model: str) -> list[dict]:
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     body = {"model": model, "max_tokens": 1024,
@@ -374,6 +516,12 @@ async def search(site: str, q: str, keys: dict, hint: str = "", arxiv_cats: list
         return await search_europepmc(q)
     if site in SO_SITES:
         return await search_stackoverflow(q, site)
+    if site in ("serper", "serper_scholar"):
+        return await search_serper(web_q if site == "serper" else q, keys["serper"], scholar=site == "serper_scholar")
+    if site in ("serpapi", "serpapi_scholar"):
+        return await search_serpapi(web_q if site == "serpapi" else q, keys["serpapi"], scholar=site == "serpapi_scholar")
+    if site == "google_books":
+        return await search_google_books(q, keys.get("google"))
     if site == "tavily":
         return await search_tavily(web_q, keys["tavily"])
     if site == "brave":
@@ -394,6 +542,8 @@ async def fetch(site: str, ref: str | None, url: str | None, keys: dict) -> dict
             return await fetch_europepmc(ref)
         if site in SO_SITES and ref:
             return await fetch_stackoverflow(ref, site)
+        if site == "google_books" and ref:
+            return await fetch_google_books(ref, keys.get("google"))
     except httpx.HTTPError as e:
         raise SourceError(f"No se pudo descargar de {PROVIDERS[site]['name']} ({type(e).__name__}).") from e
     if url:

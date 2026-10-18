@@ -11,6 +11,10 @@ const main = $("#main");
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+function safeHref(u) {
+  // solo enlaces http(s): evita que un resultado externo traiga un "javascript:" u otro esquema
+  return /^https?:\/\//i.test(String(u || "")) ? esc(u) : "#";
+}
 function strip(s) {
   return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
@@ -151,6 +155,7 @@ const routes = [
   [/^\/guia$/, viewGuide, "guia"],
   [/^\/pomodoro$/, viewPomodoro, "pomodoro"],
   [/^\/tareas$/, viewTasks, "tareas"],
+  [/^\/notas$/, viewNotebook, "notas"],
   [/^\/ajustes$/, viewSettings, "ajustes"],
 ];
 function parseHash() {
@@ -511,7 +516,9 @@ async function viewNew(params) {
         return;
       }
       const all = [];
-      box.innerHTML = (res.fallback_en ? `<p class="callout small">No hubo resultados en español; se muestran artículos en inglés.</p>` : "") +
+      const ytq = q + (category && category !== "otros" ? " " + ($(`[data-cat="${category}"]`)?.textContent || "") : "") + " explicación";
+      box.innerHTML = `<p class="yt-line"><a href="https://www.youtube.com/results?search_query=${encodeURIComponent(ytq.toLowerCase())}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5.5" width="19" height="13" rx="4"/><path d="m10 9 5 3-5 3z"/></svg>Ver videos sobre «${esc(q)}» en YouTube</a><span class="small muted"> Al crear el tema, en la pestaña Videos vas a tener recomendaciones.</span></p>` +
+        (res.fallback_en ? `<p class="callout small">No hubo resultados en español; se muestran artículos en inglés.</p>` : "") +
         groups.map(g => `
           <div class="src-group">
             <div class="row" style="margin-bottom:8px"><h3>${esc(g.name)}</h3><span class="small muted">${esc(g.about)}</span></div>
@@ -522,7 +529,7 @@ async function viewNew(params) {
               return `<label class="result-item ${selected.has(key) ? "sel" : ""}">
                 <input type="checkbox" data-i="${i}" data-key="${esc(key)}" ${selected.has(key) ? "checked" : ""}>
                 <div><h3>${esc(r.title)}</h3>${r.snippet ? `<p>${esc(r.snippet)}…</p>` : ""}
-                <p class="small muted">${r.meta ? `${esc(r.meta)}, ` : ""}${r.words ? `${r.words.toLocaleString("es-AR")} palabras, ` : ""}<a href="${esc(r.url)}" target="_blank" rel="noopener">ver página</a></p></div>
+                <p class="small muted">${r.meta ? `${esc(r.meta)}, ` : ""}${r.words ? `${r.words.toLocaleString("es-AR")} palabras, ` : ""}<a href="${safeHref(r.url)}" target="_blank" rel="noopener">ver página</a></p></div>
               </label>`;
             }).join("")}</div>
             ${g.suggestions_html ? `<iframe class="g-suggest" sandbox="allow-popups allow-popups-to-escape-sandbox" title="Sugerencias de búsqueda de Google"></iframe>` : ""}
@@ -541,7 +548,7 @@ async function viewNew(params) {
       $$("#results input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
         const r = all[+cb.dataset.i];
         const entry = r.site === "web" ? { url: r.url, label: r.title, source: "Google" }
-          : r.ref || ["tavily", "brave", "claude_web"].includes(r.site)
+          : r.ref || r.kind === "provider"
             ? { site: r.site, ref: r.ref, url: r.url, title: r.title, label: r.title, source: r.source_name, provider: true }
             : { site: r.site, title: r.title, label: r.title, source: r.source_name };
         const ok = select(cb.dataset.key, entry, cb.checked);
@@ -635,6 +642,7 @@ async function viewTopic(id, params) {
           ${s.due ? `<button class="btn big" id="go-review">Repasar lo de hoy (${s.due})</button>` : ""}
           ${s.errors ? `<button class="btn big" id="go-errors">Practicar errores (${s.errors})</button>` : ""}
           <button class="btn ghost big" id="go-export" aria-expanded="false">Guardar PDF</button>
+          <a class="btn ghost big" href="#/notas?tema=${t.id}">Anotar</a>
         </div>
         ${levelPicker()}
         <div class="panel export-panel" id="export-panel" hidden>
@@ -657,7 +665,7 @@ async function viewTopic(id, params) {
         </div>
       </div>
       <div class="tabs" role="tablist">
-        ${[["tecnicas", "Técnicas"], ["leer", "Leer"], ["errores", `Errores${s.errors ? ` (${s.errors})` : ""}`], ["fuentes", "Fuentes"]].map(([k, l]) =>
+        ${[["tecnicas", "Técnicas"], ["leer", "Leer"], ["errores", `Errores${s.errors ? ` (${s.errors})` : ""}`], ["videos", "Videos"], ["fuentes", "Fuentes"]].map(([k, l]) =>
           `<button role="tab" data-tab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}
       </div>
       <div id="tab-body"></div>
@@ -751,6 +759,8 @@ async function viewTopic(id, params) {
           </div></li>`).join("")}</ul>`
         : `<div class="empty"><h3>No hay errores pendientes</h3><p class="muted">Cuando falles una pregunta va a aparecer acá hasta que la respondas bien.</p></div>`;
       $("#err-go")?.addEventListener("click", () => startSession({ mode: "errors", topic_ids: [t.id], n: 14, tech: "errores", back: `#/tema/${t.id}?tab=errores` }));
+    } else if (which === "videos") {
+      await renderVideos(body, t);
     } else {
       body.innerHTML = `
         <ul class="list">${t.sources.map(src => `
@@ -1458,9 +1468,12 @@ async function viewSettings() {
       </div>
       <div class="panel" style="margin-top:16px">
         <h3>Buscadores con clave</h3>
-        <p class="small muted" style="margin-top:6px">Opcionales. Wikipedia, Wikilibros, Wikiversidad, arXiv, Europe PMC y Stack Overflow funcionan sin clave. Google usa tu clave de Gemini y «Web (vía Claude)», la de Claude.</p>
+        <p class="small muted" style="margin-top:6px">Opcionales. Wikipedia, Wikilibros, Wikiversidad, Google Libros, arXiv, Europe PMC y Stack Overflow funcionan sin clave. «Google (vía Gemini)» usa tu clave de Gemini y «Web (vía Claude)», la de Claude. Con cualquiera de estas claves también se recomiendan videos de YouTube en cada tema.</p>
         <form id="sk" class="stack" style="--gap:12px;margin-top:12px">
-          ${[["tavily", "Tavily", "tvly-…", `Buscador web para IA, 1.000 búsquedas gratis por mes sin tarjeta. Clave en <a href="https://app.tavily.com" target="_blank" rel="noopener">app.tavily.com</a>.`],
+          ${[["google", "YouTube (clave de Google Cloud)", "AIza…", `Para recomendar videos en cada tema (100 búsquedas gratis por día). En <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">Google Cloud</a> activá la «YouTube Data API v3» y creá una clave en Credenciales. La clave de Gemini sirve solo si le habilitás también esa API.`],
+             ["serper", "Serper: Google y Google Académico", "Clave de serper.dev", `Resultados de Google, Google Académico y videos. 2.500 búsquedas gratis al registrarte, sin tarjeta, en <a href="https://serper.dev" target="_blank" rel="noopener">serper.dev</a>.`],
+             ["serpapi", "SerpApi: Google, Google Académico y YouTube", "Clave de serpapi.com", `250 búsquedas gratis por mes, sin tarjeta, en <a href="https://serpapi.com" target="_blank" rel="noopener">serpapi.com</a>.`],
+             ["tavily", "Tavily", "tvly-…", `Buscador web para IA, 1.000 búsquedas gratis por mes sin tarjeta. Clave en <a href="https://app.tavily.com" target="_blank" rel="noopener">app.tavily.com</a>.`],
              ["brave", "Brave Search", "Clave de la API", `Buscador independiente. Clave en <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> (revisá allí sus planes vigentes).`],
              ["openalex", "OpenAlex (opcional)", "Clave gratuita", `Sin clave funciona con un límite diario bajo; con la clave gratuita de <a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org</a> el límite es 10 veces mayor.`]]
             .map(([k, label, ph, help]) => `
@@ -1486,7 +1499,7 @@ async function viewSettings() {
       e.preventDefault();
       const fd = new FormData(e.target);
       const keys = {};
-      for (const k of ["tavily", "brave", "openalex"]) { const v = (fd.get(k) || "").trim(); if (v) keys[k] = v; }
+      for (const k of ["google", "serper", "serpapi", "tavily", "brave", "openalex"]) { const v = (fd.get(k) || "").trim(); if (v) keys[k] = v; }
       if (!Object.keys(keys).length) { toast("No escribiste ninguna clave nueva"); return; }
       await api("/api/settings", { method: "POST", body: { search_keys: keys } });
       toast("Claves guardadas");
@@ -1528,6 +1541,43 @@ async function viewSettings() {
 }
 
 // ------------------------------------------------------------------------- //
+// Videos de YouTube recomendados
+// ------------------------------------------------------------------------- //
+async function renderVideos(body, t, refresh = false) {
+  body.innerHTML = `<p class="muted"><span class="loader"></span> Buscando videos que expliquen «${esc(t.title)}»…</p>`;
+  let d;
+  try { d = await api(`/api/topics/${t.id}/videos${refresh ? "?refresh=1" : ""}`); }
+  catch (e) { body.innerHTML = `<div class="empty"><h3>No se pudieron buscar videos</h3><p class="muted">${esc(e.message)}</p></div>`; return; }
+  const cards = d.videos.map(v => `
+    <a class="video" href="${safeHref(v.url)}" target="_blank" rel="noopener">
+      <span class="video-thumb"><img src="${safeHref(v.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">${v.duration ? `<b>${esc(v.duration)}</b>` : ""}</span>
+      <span class="video-body">
+        <span class="video-title">${esc(v.title)}</span>
+        <span class="video-meta">${[v.channel, v.views, /^\d{4}-\d{2}-\d{2}$/.test(v.published || "") ? new Date(v.published + "T12:00:00").toLocaleDateString("es-AR", { month: "short", year: "numeric" }) : v.published].filter(Boolean).map(esc).join(" · ")}</span>
+        ${v.description ? `<span class="video-desc">${esc(v.description)}</span>` : ""}
+      </span>
+    </a>`).join("");
+  const sectionLinks = d.sections.length ? `
+    <h3 style="margin-top:26px">Buscar por parte del tema</h3>
+    <p class="small muted" style="margin-top:4px">Cada enlace abre la búsqueda en YouTube para esa sección.</p>
+    <div class="chips" style="margin-top:10px">${d.sections.map(x => `<a class="chip yt-chip" href="${safeHref(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</div>` : "";
+  body.innerHTML = `
+    <div class="row" style="margin-bottom:14px;align-items:flex-start">
+      <p class="muted grow">${d.videos.length
+        ? `Videos recomendados para comprender el tema${d.via ? ` (encontrados con ${esc(d.via)})` : ""}. Se descartan los Shorts y los de menos de 2 minutos y medio. Mirá uno y después ponete a prueba con preguntas: así el video suma de verdad.`
+        : d.needs_key
+          ? `Para recomendar videos concretos hace falta una clave de búsqueda (en <a href="#/ajustes">Ajustes</a>): la de <b>YouTube</b> (gratis, 100 búsquedas por día) o la de Serper, SerpApi, Brave o Tavily si ya tenés alguna. Mientras tanto, podés buscar directo en YouTube.`
+          : `No se encontraron videos.${d.errors.length ? " " + esc(d.errors.join(" ")) : ""}`}</p>
+      <a class="btn" href="${safeHref(d.search_url)}" target="_blank" rel="noopener">Buscar en YouTube</a>
+      ${d.providers.length ? `<button class="btn ghost" id="vid-refresh">Buscar otros</button>` : ""}
+    </div>
+    ${d.videos.length ? `<div class="videos">${cards}</div>` : ""}
+    ${sectionLinks}
+    <p class="small muted" style="margin-top:22px">Los videos son de terceros: contrastá lo que dicen con las fuentes del tema.</p>`;
+  $("#vid-refresh")?.addEventListener("click", () => renderVideos(body, t, true));
+}
+
+// ------------------------------------------------------------------------- //
 // Login
 // ------------------------------------------------------------------------- //
 let ME = null;
@@ -1545,7 +1595,7 @@ function viewLogin(mode) {
         : "Entrá para ver tus temas y seguir estudiando."}</p>
       <form id="login-form" class="stack" autocomplete="on">
         <label class="field"><span>Usuario</span>
-          <input class="input" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\-]{3,32}"
+          <input class="input" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\\-]{3,32}"
             autocomplete="username" autocapitalize="none" spellcheck="false" title="Letras sin tilde, números, punto, guion o guion bajo"></label>
         <label class="field"><span>Contraseña</span>
           <input class="input" type="password" name="password" required minlength="8" maxlength="256"
@@ -1601,5 +1651,6 @@ async function logout() {
     box.querySelector("button").addEventListener("click", logout);
   }
   pomoInit();
+  quickNoteInit();
   route();
 })();

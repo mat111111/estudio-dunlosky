@@ -120,6 +120,23 @@ CREATE TABLE IF NOT EXISTS concept_cache (
     created_at TEXT NOT NULL,
     PRIMARY KEY (topic_id, term)
 );
+CREATE TABLE IF NOT EXISTS notebook (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+    pinned INTEGER DEFAULT 0,
+    color TEXT DEFAULT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notebook_updated ON notebook(updated_at);
+CREATE TABLE IF NOT EXISTS topic_videos (
+    topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    via TEXT,
+    fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pomodoros (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,

@@ -49,7 +49,8 @@ function pomoLoad() {
     const st = JSON.parse(localStorage.getItem("pomo_state"));
     if (st) POMO.st = { ...POMO.st, ...st };
   } catch (e) { /* sin almacenamiento */ }
-  if (!POMO.st.running && !POMO.st.endsAt && POMO.st.remaining == null) POMO.st.remaining = POMO.cfg.focus * 60;
+  // estado viejo trabado (por ejemplo, en 00:01 por el error anterior): se vuelve al inicio del modo
+  if (!POMO.st.running && (POMO.st.remaining == null || POMO.st.remaining < 1)) POMO.st.remaining = pomoDuration();
 }
 function pomoSave() {
   try {
@@ -199,28 +200,34 @@ function pomoNextMode() {
   if (POMO.st.mode === "focus") return POMO.st.cycle % POMO.cfg.every === 0 ? "long" : "short";
   return "focus";
 }
-async function pomoComplete(skipped = false) {
+function pomoComplete(skipped = false) {
+  // Todo el cambio de estado es inmediato. Antes se esperaba a que el servidor registrara el
+  // pomodoro y, si tardaba (por ejemplo, Render despertando), el reloj quedaba clavado en 00:01.
   const finished = POMO.st.mode;
-  POMO.st.running = false;  // evita que el reloj lo dispare dos veces mientras se registra
-  POMO.st.endsAt = null;
+  const minutes = POMO.cfg.focus;
+  const taskId = POMO.st.taskId;
   ambientStop();
   if (!skipped) playAlarm();
-  let stats = null;
-  if (finished === "focus" && !skipped) {
-    POMO.st.cycle += 1;
-    try { stats = await api("/api/pomodoros", { method: "POST", body: { minutes: POMO.cfg.focus, task_id: POMO.st.taskId } }); }
-    catch (e) { /* sin conexión: no se registra */ }
-    const el = document.getElementById("p-today");
-    if (el && stats) el.textContent = `Hoy: ${plural(stats.today, "pomodoro", "pomodoros")}, ${plural(stats.minutes_today, "minuto", "minutos")} de concentración.`;
-  }
+  if (finished === "focus" && !skipped) POMO.st.cycle += 1;
   const next = pomoNextMode();
   pomoReset(next);
-  const auto = next === "focus" ? POMO.cfg.autoFocus : POMO.cfg.autoBreak;
+  const auto = !skipped && (next === "focus" ? POMO.cfg.autoFocus : POMO.cfg.autoBreak);
   if (auto) pomoStart();
-  if (!skipped) {
-    pomoNotify(finished, next);
-    pomoCelebrate(finished, next, stats, auto);
-  }
+  if (skipped) return;
+  pomoNotify(finished, next);
+  pomoCelebrate(finished, next, null, auto);
+  if (finished === "focus") pomoRegister(minutes, taskId);
+}
+async function pomoRegister(minutes, taskId) {
+  let stats = null;
+  try { stats = await api("/api/pomodoros", { method: "POST", body: { minutes, task_id: taskId } }); }
+  catch (e) { return; /* sin conexión: no se registra */ }
+  if (!stats) return;
+  const txt = `Hoy: ${plural(stats.today, "pomodoro", "pomodoros")}, ${plural(stats.minutes_today, "minuto", "minutos")} de concentración.`;
+  const el = document.getElementById("p-today");
+  if (el) el.textContent = txt;
+  const extra = document.querySelector("#pomo-dialog [data-stats]");
+  if (extra) extra.textContent = ` Hoy llevás ${plural(stats.today, "pomodoro", "pomodoros")} (${plural(stats.minutes_today, "minuto", "minutos")}).`;
 }
 function pomoTick() {
   if (POMO.st.running && pomoRemaining() <= 0) { pomoComplete(); return; }
@@ -256,7 +263,7 @@ function pomoCelebrate(finished, next, stats, autoStarted) {
     dlg.innerHTML = `
       <div class="pomo-done">
         <p class="pomo-cheer">¡Seguí así, lo estás logrando!</p>
-        <p class="muted">${esc(cheer)}${stats ? ` Hoy llevás ${plural(stats.today, "pomodoro", "pomodoros")} (${plural(stats.minutes_today, "minuto", "minutos")}).` : ""}</p>
+        <p class="muted">${esc(cheer)}<span data-stats></span></p>
         <blockquote class="quote"><p>${esc(quote.q)}</p><footer>Albert Einstein, ${esc(quote.src)}</footer></blockquote>
         <div class="actions">
           ${autoStarted ? `<button class="btn primary" data-close>Ya empezó tu ${esc(nextLabel)}</button>`
@@ -290,6 +297,7 @@ function pomoInit() {
     document.addEventListener("pointerdown", () => { if (POMO.st.running && POMO.st.mode === "focus") ambientStart(); }, { once: true });
   }
   POMO.timer = setInterval(pomoTick, 250);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pomoTick(); });
   pomoBadge();
 }
 
@@ -312,7 +320,7 @@ async function viewPomodoro() {
       </div>
       <section class="pomo" id="pomo">
         <div class="seg pomo-modes" role="group" aria-label="Modo">
-          ${Object.entries(POMO_MODES).map(([k, v]) => `<button type="button" data-mode="${k}">${v.label}</button>`).join("")}
+          ${Object.entries(POMO_MODES).map(([k, v]) => `<button type="button" data-pomo-mode="${k}">${v.label}</button>`).join("")}
         </div>
         <div class="pomo-dial">
           <svg viewBox="0 0 240 240" aria-hidden="true">
@@ -367,9 +375,9 @@ async function viewPomodoro() {
     $("#clock").textContent = fmtClock(rem);
     $("#pomo-mode").textContent = POMO_MODES[POMO.st.mode].label;
     ring.style.strokeDashoffset = String(CIRC * (1 - rem / total));
-    $("#pomo").dataset.mode = POMO.st.mode;
+    $("#pomo").dataset.phase = POMO.st.mode;
     $("#p-toggle").textContent = POMO.st.running ? "Pausar" : (rem < total ? "Continuar" : "Empezar");
-    $$("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === POMO.st.mode));
+    $$("[data-pomo-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.pomoMode === POMO.st.mode));
     const inCycle = POMO.st.cycle % c.every;
     $("#p-cycle").textContent = `Pomodoros en este ciclo: ${inCycle} de ${c.every} antes del descanso largo.`;
   };
@@ -380,9 +388,14 @@ async function viewPomodoro() {
   $("#p-toggle").addEventListener("click", () => (POMO.st.running ? pomoPause() : pomoStart()));
   $("#p-reset").addEventListener("click", () => pomoReset());
   $("#p-skip").addEventListener("click", () => pomoComplete(true));
-  $$("[data-mode]").forEach(b => b.addEventListener("click", () => {
-    if (POMO.st.running && !confirm("Hay un temporizador en marcha. ¿Cambiar de modo y reiniciarlo?")) return;
-    pomoReset(b.dataset.mode);
+  // Antes, el atributo data-mode también estaba en el contenedor #pomo: cualquier clic adentro
+  // (por ejemplo en «Empezar») se tomaba como cambio de modo y pedía confirmación.
+  $$("[data-pomo-mode]").forEach(b => b.addEventListener("click", () => {
+    const mode = b.dataset.pomoMode;
+    if (mode === POMO.st.mode && POMO.st.running) return;
+    const started = POMO.st.running || pomoRemaining() < pomoDuration();
+    if (started && mode !== POMO.st.mode && !confirm("Hay un temporizador en curso. ¿Cambiar de modo y reiniciarlo?")) return;
+    pomoReset(mode);
   }));
   $("#p-task").addEventListener("change", e => {
     const v = e.target.value;

@@ -64,6 +64,7 @@ async function openConcept(topicId, term) {
         <ul>${d.mentions.map(m => `<li><span class="small muted">${esc(m.section_title)}</span><br>${highlightIn(m.text, d.term)}</li>`).join("")}</ul></details>` : ""}
       <div class="actions">
         <button class="btn primary" data-practice>Practicar este concepto</button>
+        <a class="btn" href="https://www.youtube.com/results?search_query=${encodeURIComponent(`${d.term} ${d.topic || ""} explicación`.replace(/\s+/g, " ").trim())}" target="_blank" rel="noopener">Ver videos en YouTube</a>
       </div>
     </div>`;
   dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());

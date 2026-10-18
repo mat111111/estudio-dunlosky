@@ -79,6 +79,11 @@ class TestLogin(unittest.TestCase):
             tid = a.post("/api/topics", json={"title": "Privado", "notes": {"title": "P", "text": texto}}).json()["id"]
             self.assertEqual([t["title"] for t in b.get("/api/topics").json()], [])
             self.assertEqual(b.get(f"/api/topics/{tid}").status_code, 404)
+            nid = a.post("/api/notebook", json={"title": "Secreto", "content": "solo mío"}).json()["id"]
+            self.assertEqual(b.get("/api/notebook").json(), [])
+            self.assertEqual(b.get(f"/api/notebook/{nid}").status_code, 404)
+            self.assertEqual(b.delete(f"/api/notebook/{nid}").status_code, 404)
+            self.assertEqual(a.get(f"/api/notebook/{nid}").json()["content"], "solo mío")
 
     def test_fuerza_bruta(self):
         with TestClient(app) as c:

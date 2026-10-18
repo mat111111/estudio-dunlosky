@@ -10,6 +10,7 @@ import httpx
 
 from app import search_providers as sp
 from app import sources
+from app import videos
 
 ABSTRACT = ("La fotosíntesis es el proceso por el cual las plantas transforman la energía de la luz en energía "
             "química. Este trabajo analiza cómo la temperatura y la disponibilidad de agua modifican la eficiencia "
@@ -70,14 +71,78 @@ def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"items": [{"question_id": 77, "title": "¿Qué es un puntero en C++?", "link": "https://es.stackoverflow.com/q/77",
                                                     "score": 15, "answer_count": 3, "is_answered": True,
                                                     "body": "<p>No entiendo qué es un puntero en C++.</p>"}]})
+    if host == "google.serper.dev":
+        assert request.headers["X-API-KEY"] == "serper-test"
+        body = json.loads(request.content)
+        if request.url.path == "/scholar":
+            return httpx.Response(200, json={"organic": [{"title": "Planificación de procesos", "link": "https://repo.edu/tesis",
+                                                          "publicationInfo": "J Gómez - 2019 - repo.edu", "year": 2019,
+                                                          "citedBy": 8, "snippet": "Se comparan algoritmos de planificación."}]})
+        if request.url.path == "/videos":
+            return httpx.Response(200, json={"videos": [
+                {"title": "Round Robin explicado", "link": "https://www.youtube.com/watch?v=abcdefghijk", "channel": "Profe X",
+                 "duration": "12:05", "date": "hace 2 años", "snippet": "Explicación con ejemplos"},
+                {"title": "Short", "link": "https://www.youtube.com/shorts/zzzzzzzzzzz", "duration": "0:40"},
+                {"title": "Muy corto", "link": "https://www.youtube.com/watch?v=shortvideo1", "duration": "1:10"}]})
+        assert body["hl"] == "es"
+        return httpx.Response(200, json={"organic": [{"title": "Round Robin - Apunte", "link": "https://ejemplo.edu/rr",
+                                                      "snippet": "El algoritmo Round Robin asigna un quantum."}]})
+    if host == "serpapi.com":
+        params = dict(request.url.params)
+        assert params["api_key"] == "serpapi-test"
+        if params["engine"] == "youtube":
+            return httpx.Response(200, json={"video_results": [
+                {"title": "Punteros en C++ desde cero", "link": "https://www.youtube.com/watch?v=pppppppppp1",
+                 "channel": {"name": "Canal C"}, "length": "1:02:03", "views": 120345, "published_date": "hace 1 año",
+                 "thumbnail": {"static": "https://i.ytimg.com/vi/pppppppppp1/hq720.jpg"}, "description": "Clase completa"}]})
+        if params["engine"] == "google_scholar":
+            return httpx.Response(200, json={"organic_results": [{"title": "Memoria virtual", "link": "https://repo.edu/mv",
+                                                                  "snippet": "Paginación por demanda.",
+                                                                  "publication_info": {"summary": "A Ruiz - 2018"},
+                                                                  "inline_links": {"cited_by": {"total": 30}}}]})
+        if params["q"] == "sin resultados":
+            return httpx.Response(200, json={"error": "Google hasn't returned any results for this query."})
+        return httpx.Response(200, json={"organic_results": [{"title": "Memoria virtual - UTN", "link": "https://utn.edu/mv",
+                                                              "snippet": "La memoria virtual permite..."}]})
+    if host == "www.googleapis.com" and request.url.path.startswith("/books/v1/volumes/"):
+        return httpx.Response(200, json={"volumeInfo": {"title": "Sistemas operativos", "authors": ["A. Silberschatz"],
+                                                        "publishedDate": "2006", "language": "es",
+                                                        "infoLink": "https://books.google.com/books?id=B1",
+                                                        "description": "<p>" + ABSTRACT + " " + ABSTRACT + "</p>",
+                                                        "categories": ["Computers"]}})
+    if host == "www.googleapis.com" and request.url.path == "/books/v1/volumes":
+        return httpx.Response(200, json={"items": [
+            {"id": "B1", "volumeInfo": {"title": "Sistemas operativos", "subtitle": "Conceptos", "authors": ["A. Silberschatz"],
+                                        "publishedDate": "2006", "infoLink": "https://books.google.com/books?id=B1",
+                                        "description": ABSTRACT}},
+            {"id": "B2", "volumeInfo": {"title": "Sin descripción"}}]})
+    if host == "www.googleapis.com" and request.url.path == "/youtube/v3/search":
+        if request.url.params["key"] == "mala":
+            return httpx.Response(403, json={"error": {"errors": [{"reason": "quotaExceeded"}]}})
+        return httpx.Response(200, json={"items": [
+            {"id": {"videoId": "yt000000001"}, "snippet": {"title": "Fotos&iacute;ntesis &quot;f&aacute;cil&quot;", "channelTitle": "Bio",
+                                                          "publishedAt": "2022-05-01T00:00:00Z", "description": "Clase"}},
+            {"id": {"videoId": "yt000000002"}, "snippet": {"title": "Short", "channelTitle": "X"}}]})
+    if host == "www.googleapis.com" and request.url.path == "/youtube/v3/videos":
+        return httpx.Response(200, json={"items": [
+            {"id": "yt000000001", "contentDetails": {"duration": "PT14M2S"}, "statistics": {"viewCount": "15300"}},
+            {"id": "yt000000002", "contentDetails": {"duration": "PT45S"}, "statistics": {"viewCount": "9"}}]})
     if host == "api.tavily.com":
         assert request.headers["Authorization"] == "Bearer tvly-test"
         body = json.loads(request.content)
         assert body["query"]
+        if body.get("include_domains") == ["youtube.com"]:
+            return httpx.Response(200, json={"results": [{"title": "Clase de redes - YouTube",
+                                                          "url": "https://www.youtube.com/watch?v=tttttttttt1", "content": "Modelo OSI"}]})
         return httpx.Response(200, json={"results": [{"title": "Punteros en C++", "url": "https://ejemplo.edu/punteros",
                                                       "content": "Un puntero es una variable que guarda una dirección."}]})
     if host == "api.search.brave.com":
         assert request.headers["X-Subscription-Token"] == "brave-test"
+        if request.url.path.endswith("/videos/search"):
+            return httpx.Response(200, json={"results": [{"title": "TCP vs UDP", "url": "https://www.youtube.com/watch?v=bbbbbbbbbb1",
+                                                          "video": {"duration": "08:30", "creator": "Redes Fácil"},
+                                                          "thumbnail": {"src": "https://img/x.jpg"}},
+                                                         {"title": "Otro sitio", "url": "https://vimeo.com/1"}]})
         return httpx.Response(200, json={"web": {"results": [{"title": "<strong>Punteros</strong> - Apunte",
                                                                "url": "https://ejemplo.edu/apunte",
                                                                "description": "Qué es un <strong>puntero</strong>."}]}})
@@ -152,6 +217,47 @@ class FakeClients(unittest.TestCase):
         self.assertEqual(b[0]["title"], "Punteros - Apunte")
         c = self.run_(sp.search("claude_web", "punteros", {"anthropic": "sk-x"}))
         self.assertEqual(c[0]["url"], "https://ejemplo.edu/c")
+
+    def test_google_serper_serpapi_libros(self):
+        g = self.run_(sp.search("serper", "round robin", {"serper": "serper-test"}, hint="sistemas operativos"))
+        self.assertEqual(g[0]["url"], "https://ejemplo.edu/rr")
+        self.assertEqual(g[0]["kind"], "provider")
+        sch = self.run_(sp.search("serper_scholar", "planificación", {"serper": "serper-test"}))
+        self.assertIn("8 citas", sch[0]["meta"])
+        sa = self.run_(sp.search("serpapi", "memoria virtual", {"serpapi": "serpapi-test"}))
+        self.assertEqual(sa[0]["url"], "https://utn.edu/mv")
+        self.assertEqual(self.run_(sp.search("serpapi", "sin resultados", {"serpapi": "serpapi-test"})), [])
+        sas = self.run_(sp.search("serpapi_scholar", "memoria", {"serpapi": "serpapi-test"}))
+        self.assertIn("30 citas", sas[0]["meta"])
+        books = self.run_(sp.search("google_books", "sistemas operativos", {}))
+        self.assertEqual([b["ref"] for b in books], ["B1"])  # el libro sin descripción se descarta
+        self.assertEqual(books[0]["title"], "Sistemas operativos: Conceptos")
+        src = self.run_(sp.fetch("google_books", "B1", None, {}))
+        self.assertIn("Silberschatz", src["source_name"])
+        self.assertEqual(sp.key_name("serper_scholar"), "serper")
+
+    def test_videos_proveedores(self):
+        yt = self.run_(videos.find("fotosíntesis", {"google": "AIza-test"}))
+        self.assertEqual(yt["via"], "YouTube")
+        self.assertEqual([v["id"] for v in yt["videos"]], ["yt000000001"])  # el de 45 s se descarta
+        self.assertEqual(yt["videos"][0]["title"], 'Fotosíntesis "fácil"')
+        self.assertEqual(yt["videos"][0]["duration"], "14:02")
+        # si YouTube falla (cuota), se pasa al siguiente proveedor configurado
+        fb = self.run_(videos.find("round robin", {"google": "mala", "serper": "serper-test"}))
+        self.assertEqual(fb["via"], "Serper")
+        self.assertEqual([v["id"] for v in fb["videos"]], ["abcdefghijk"])  # sin Shorts ni videos cortos
+        self.assertTrue(any("cuota" in e for e in fb["errors"]))
+        sa = self.run_(videos.find("punteros", {"serpapi": "serpapi-test"}))
+        self.assertEqual(sa["videos"][0]["duration"], "1:02:03")
+        self.assertEqual(sa["videos"][0]["channel"], "Canal C")
+        br = self.run_(videos.find("tcp", {"brave": "brave-test"}))
+        self.assertEqual([v["id"] for v in br["videos"]], ["bbbbbbbbbb1"])
+        tv = self.run_(videos.find("redes", {"tavily": "tvly-test"}))
+        self.assertEqual(tv["videos"][0]["title"], "Clase de redes")
+        none = self.run_(videos.find("x", {}))
+        self.assertEqual(none["videos"], [])
+        self.assertIsNone(videos.video_id("https://www.youtube.com/shorts/abcdefghijk"))
+        self.assertEqual(videos.parse_iso_duration("PT1H2M3S"), 3723)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import io
+import re
 import os
 from datetime import datetime
 from xml.sax.saxutils import escape
@@ -222,7 +223,7 @@ def _sources_block(sources: list[dict], st: dict) -> list:
 
 
 def build_notes_pdf(topic: dict, sources: list[dict], sections: list[dict], glossary: list[dict],
-                    ai_generated: bool = False, questions: dict | None = None) -> bytes:
+                    ai_generated: bool = False, questions: dict | None = None, videos: list[dict] | None = None) -> bytes:
     """Apunte de estudio.
 
     sections: [{"id", "title", "paragraphs": [[(oración, resaltada), ...], ...], "summary": str|None}]
@@ -259,8 +260,12 @@ def build_notes_pdf(topic: dict, sources: list[dict], sections: list[dict], glos
         story.append(Paragraph("Contenido", st["h2"]))
         for i, sec in enumerate(sections, 1):
             story.append(Paragraph(f"{i}. {_t(sec['title'])}", st["opt"]))
+        extra = len(sections)
         if glossary:
-            story.append(Paragraph(f"{len(sections) + 1}. Glosario", st["opt"]))
+            extra += 1
+            story.append(Paragraph(f"{extra}. Glosario", st["opt"]))
+        if videos:
+            story.append(Paragraph(f"{extra + 1}. Videos recomendados", st["opt"]))
 
     for i, sec in enumerate(sections, 1):
         story.append(Paragraph(f"{i}. {_t(sec['title'])}", st["h2"]))
@@ -283,6 +288,20 @@ def build_notes_pdf(topic: dict, sources: list[dict], sections: list[dict], glos
                     block.append(Paragraph(f"<b>{lab}:</b> {_t(g[key])}", gtext))
             story.append(KeepTogether(block))
 
+    if videos:
+        story.append(Paragraph("Videos recomendados", st["h2"]))
+        story.append(Paragraph(_t("Videos de YouTube para comprender el tema (contenido de terceros: contrastalo con las fuentes)."), st["meta"]))
+        story.append(Spacer(1, 4))
+        for v in videos:
+            url = str(v.get("url") or "")
+            if not url.startswith("https://www.youtube.com/"):
+                continue
+            meta = " · ".join(x for x in (v.get("channel"), v.get("duration")) if x)
+            story.append(Paragraph(f'<link href="{escape(url, {chr(34): "&quot;"})}" color="#2340C8"><u>{_t(v.get("title"))}</u></link>'
+                                   + (f'<br/><font color="#7A839C" size="9">{_t(meta)}  {_t(url)}</font>' if meta else
+                                      f'<br/><font color="#7A839C" size="9">{_t(url)}</font>'), gtext))
+            story.append(Spacer(1, 4))
+
     if questions and any(questions.values()):
         story.append(PageBreak())
         story.append(Paragraph("Preguntas y respuestas", st["title"]))
@@ -298,4 +317,56 @@ def build_notes_pdf(topic: dict, sources: list[dict], sections: list[dict], glos
                 story.extend(_question_block(n, it, st, with_answer=True, lead=head if j == 0 else None))
 
     doc.build(story, onFirstPage=_on_page(topic["title"]), onLaterPages=_on_page(topic["title"]))
+    return buf.getvalue()
+
+
+def build_note_pdf(title: str, content: str, topic_title: str | None = None, updated_at: str | None = None) -> bytes:
+    """Una nota del bloc de notas. Respeta los párrafos y las listas simples (-, *, 1.)."""
+    _register_fonts()
+    st = _styles()
+    body = ParagraphStyle("nbody", parent=st["q"], fontSize=10.5, leading=15.5, spaceAfter=6)
+    bullet = ParagraphStyle("nbullet", parent=body, leftIndent=16, bulletIndent=4, spaceAfter=3)
+    head = ParagraphStyle("nhead", parent=st["h2"], fontSize=13, leading=17, spaceBefore=10)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm,
+                            bottomMargin=18 * mm, title=_plain(title), author="Estudio Dunlosky", subject="Nota")
+    story: list = [Paragraph(_t(title), st["title"]), Spacer(1, 4)]
+    meta = []
+    if topic_title:
+        meta.append(f"Tema: {topic_title}")
+    if updated_at:
+        try:
+            meta.append("Última edición: " + datetime.fromisoformat(updated_at).astimezone().strftime("%d/%m/%Y %H:%M"))
+        except ValueError:
+            pass
+    if meta:
+        story.append(Paragraph(_t("  |  ".join(meta)), st["meta"]))
+    story.append(Spacer(1, 8))
+    para: list[str] = []
+
+    def flush():
+        if para:
+            story.append(Paragraph("<br/>".join(_t(x) for x in para), body))
+            para.clear()
+
+    for raw in (content or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            flush()
+            continue
+        m_head = re.match(r"^\s*#{1,3}\s+(.*)", line)
+        m_bul = re.match(r"^\s*[-*•]\s+(.*)", line)
+        m_num = re.match(r"^\s*(\d+)[.)]\s+(.*)", line)
+        if m_head:
+            flush(); story.append(Paragraph(_t(m_head.group(1)), head))
+        elif m_bul:
+            flush(); story.append(Paragraph(_t(m_bul.group(1)), bullet, bulletText="•"))
+        elif m_num:
+            flush(); story.append(Paragraph(_t(m_num.group(2)), bullet, bulletText=f"{m_num.group(1)}."))
+        else:
+            para.append(line)
+    flush()
+    if not content.strip():
+        story.append(Paragraph("(Nota vacía)", st["sub"]))
+    doc.build(story, onFirstPage=_on_page(title), onLaterPages=_on_page(title))
     return buf.getvalue()

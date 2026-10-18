@@ -2,7 +2,7 @@
 
 Aplicación de estudio que funciona en tu navegador y se levanta con Docker. Escribís cualquier tema, la app busca la información en enciclopedias, libros de texto, artículos académicos y foros de programación (o usa tus apuntes), genera preguntas a partir del texto, corrige tus respuestas comparándolas con la fuente y te hace practicar justo las partes en las que te equivocaste.
 
-Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas, **cuentas con usuario y contraseña** y **guardado en PDF** del material y de las preguntas.
+Está organizada alrededor de las 10 técnicas de estudio evaluadas por Dunlosky y colegas (2013), ordenadas por la utilidad que les asignaron. Además incluye un **pomodoro** configurable con sonidos, una **lista de tareas** con aviso de urgencia por color, **niveles de complejidad** para las preguntas, **cuentas con usuario y contraseña**, **bloc de notas**, **videos de YouTube recomendados** para cada tema y **guardado en PDF** del material y de las preguntas.
 
 ---
 
@@ -60,6 +60,22 @@ Atajos de teclado en la práctica: `1`–`4` eligen una opción, `Enter` pasa a 
 - Cada tarea tiene un periodo (Día, Mes o Año) y el **tiempo disponible** (en días, semanas o meses, o directamente una fecha límite).
 - Con 7 días o más se ve en verde. **Con menos de una semana el color pasa de amarillo (6 días) a rojo (vence hoy)**; si se vence queda en rojo intenso. Las urgentes aparecen también en el inicio.
 - Muestra una barra con el tiempo transcurrido y cuántos pomodoros le dedicaste.
+
+### Bloc de notas
+- En el menú, **Bloc de notas**: notas con título, color, tema asociado y la opción de fijarlas arriba. Se guardan solas mientras escribís (también con `Ctrl + S`).
+- Buscador dentro de tus notas y filtro por tema.
+- Con `#` al principio de una línea hacés un título y con `-` una lista; así queda prolija al **guardarla en PDF**. También se puede descargar como `.txt`.
+- **Nota rápida**: el botón amarillo con el lápiz (abajo a la derecha) está en todas las pantallas. Anotás una duda sin salir de lo que estás haciendo; si estás en un tema, queda asociada a ese tema.
+- En cada tema, **Anotar** abre una nota nueva ya asociada.
+
+### Videos de YouTube recomendados
+En cada tema, la pestaña **Videos** muestra videos que explican el tema (se descartan los Shorts y los de menos de 2 minutos y medio), más enlaces para buscar en YouTube cada parte del tema. La ficha de cada concepto («¿por qué?») tiene un botón **Ver videos en YouTube** y, al buscar un tema nuevo, aparece el enlace a los videos sobre esa búsqueda. Los videos encontrados también se incluyen en el **apunte en PDF**, con su enlace.
+
+Para recomendar videos concretos hace falta alguna de estas claves (en **Ajustes → Buscadores con clave**); se usa la primera que esté cargada:
+1. **YouTube Data API v3** (gratis, 100 búsquedas por día): en https://console.cloud.google.com/apis/library/youtube.googleapis.com activá la API y creá una clave en *Credenciales*. La clave de Gemini sirve solo si le habilitás también esa API.
+2. **SerpApi**, **Serper**, **Brave Search** o **Tavily**, si ya tenés alguna.
+
+Sin ninguna clave igual tenés los enlaces de búsqueda en YouTube. Los videos de cada tema se guardan; **Buscar otros** vuelve a buscar.
 
 ### Nivel de complejidad de las preguntas
 | Nivel | Qué pide |
@@ -136,7 +152,9 @@ Al buscar, elegís un área y la app consulta las fuentes más útiles para esa 
 | Ciencias y salud | Wikipedia, OpenAlex, Europe PMC y la web |
 | Otros | Cualquier tema: enciclopedias, libros de texto, OpenAlex y la web |
 
-En los buscadores web (Google vía Gemini, Tavily, Brave) el área se agrega como contexto a la búsqueda, para que «árbol» en Programación traiga estructuras de datos y no botánica.
+Con las claves de Serper o SerpApi, cada área suma también **Google** (y Matemática y Ciencias, **Google Académico**); Redes, Matemática, Sistemas operativos y Otros suman **Google Libros**.
+
+En los buscadores web (Google, Tavily, Brave) el área se agrega como contexto a la búsqueda, para que «árbol» en Programación traiga estructuras de datos y no botánica.
 
 ### Fuentes
 
@@ -146,6 +164,12 @@ En los buscadores web (Google vía Gemini, Tavily, Brave) el área se agrega com
   - **Wikiversidad**: cursos y material didáctico.
 - **Académicos (sin clave)**: **OpenAlex** (artículos de todo el mundo: resumen y, si es de acceso abierto, el texto), **arXiv** (computación, matemática y física: resumen y versión HTML cuando existe) y **Europe PMC** (biología y salud: resumen).
 - **Programación (sin clave)**: **Stack Overflow en español** y **Stack Overflow**: se importa la pregunta con sus respuestas más votadas (licencia CC BY-SA).
+- **Google** (grupo propio en el buscador):
+  - **Google (vía Gemini)**: si configuraste una clave de Gemini (ver abajo).
+  - **Google (Serper)** y **Google Académico (Serper)**: clave gratuita de https://serper.dev (2.500 búsquedas al registrarte, sin tarjeta).
+  - **Google (SerpApi)** y **Google Académico (SerpApi)**: clave gratuita de https://serpapi.com (250 búsquedas por mes, sin tarjeta).
+  - **Google Libros**: sin clave; importa la descripción del libro (solo los que tienen una descripción suficiente).
+  - La API oficial de Google (*Custom Search JSON API*) no se incluye porque Google la cerró a clientes nuevos y la da de baja en enero de 2027.
 - **Web con clave** (se cargan en Ajustes → Buscadores con clave): **Tavily** (1.000 búsquedas gratis por mes, sin tarjeta), **Brave Search** y **Web (vía Claude)**, que usa la búsqueda web de la API de Claude (se cobra aparte: US$10 cada 1.000 búsquedas).
 - La app recuerda qué buscadores dejaste marcados.
 - **Google** (si configuraste una clave de **Gemini**): la búsqueda usa la herramienta de búsqueda de Google de Gemini y muestra las páginas encontradas para importarlas. Se muestran las sugerencias de búsqueda de Google, como exige su servicio. Google cobra estas búsquedas aparte del modelo (tiene una cuota mensual gratuita).
@@ -245,6 +269,7 @@ En esa versión se activa el **modo público** (`PUBLIC_MODE=1`):
 - cada persona crea su cuenta y tiene su propio espacio: nadie ve los temas de otro;
 - la clave de IA no se puede cargar ni cambiar desde la interfaz (solo como variable de entorno en Render, y la pagarías vos), así que no conviene ponerla en una versión abierta a cualquiera;
 - si querés que solo entren las personas que vos invites, agregá en Render la variable `ALLOW_SIGNUP=0` después de crear las cuentas.
+- para que la versión publicada recomiende videos, agregá en Render (*Environment*) la variable `GOOGLE_API_KEY` con tu clave de YouTube Data API (la cuota diaria es compartida entre todos los que la usen). Lo mismo con `SERPER_API_KEY` o `SERPAPI_API_KEY` para los buscadores de Google.
 
 Límites del plan gratuito: el servicio se duerme tras unos minutos sin visitas y tarda alrededor de un minuto en despertar, y **el disco no es permanente**: cuando Render reinicia el servicio (por ejemplo, en cada `git push`) se borran las cuentas y los temas. Para conservarlos hace falta un plan pago con disco persistente montado en `/data`.
 
@@ -266,7 +291,8 @@ estudio-dunlosky/
 │   ├── main.py        API (FastAPI): temas, sesiones, corrección, técnicas, panel
 │   ├── auth.py        Cuentas, contraseñas (scrypt), sesiones y límite de intentos
 │   ├── sources.py     Wikis (búsqueda y descarga), páginas web por URL y apuntes propios
-│   ├── search_providers.py  OpenAlex, arXiv, Europe PMC, Stack Exchange, Tavily, Brave y áreas de búsqueda
+│   ├── search_providers.py  OpenAlex, arXiv, Europe PMC, Stack Exchange, Google (Serper, SerpApi, Libros), Tavily, Brave y áreas
+│   ├── videos.py      Videos de YouTube recomendados (YouTube Data API, SerpApi, Serper, Brave, Tavily)
 │   ├── export_pdf.py  Apunte y cuestionarios en PDF
 │   ├── textproc.py    Oraciones, normalización, palabras y oraciones clave
 │   ├── generator.py   Generación de preguntas ancladas a la fuente
@@ -275,7 +301,8 @@ estudio-dunlosky/
 │   ├── ai.py          Modo IA opcional (con verificación de citas)
 │   ├── db.py          Esquema y acceso a SQLite
 │   └── static/        Interfaz sin frameworks: index.html, styles.css, app.js,
-│                      pomodoro.js (temporizador y sonidos), tasks.js (tareas) y concepts.js (fichas «¿por qué?»)
+│                      pomodoro.js (temporizador y sonidos), tasks.js (tareas), concepts.js (fichas «¿por qué?»)
+│                      y notes.js (bloc de notas y nota rápida)
 ├── tests/             Pruebas automáticas (no necesitan internet)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -301,6 +328,7 @@ python -m unittest discover tests
 - **“Docker Desktop no está abierto”**: abrilo desde el menú Inicio y esperá a que termine de arrancar.
 - **“No se pudo conectar con Wikipedia”**: la app necesita internet para buscar y descargar artículos. Una vez creado el tema, se puede estudiar sin conexión.
 - **No abre en el navegador**: entrá a mano a http://localhost:8000. Si sigue sin abrir, ejecutá `docker compose logs` en la carpeta del proyecto para ver el error.
+- **El pomodoro quedaba en 00:01 o decía que ya estaba iniciado**: corregido en esta versión. Si el navegador había guardado un estado trabado, se limpia solo al abrir la app.
 - **Pide iniciar sesión otra vez**: la sesión dura 30 días; también se cierra al cambiar la contraseña. En Render gratis, cada reinicio borra las cuentas (ver más arriba).
 - **«Demasiados intentos fallidos»**: esperá 15 minutos o cambiá la contraseña desde la terminal (sección *Cuentas*).
 - **Docker pide activar WSL 2 o la virtualización**: seguí el asistente de Docker Desktop; es un requisito de Docker en Windows.
